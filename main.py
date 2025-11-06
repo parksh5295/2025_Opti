@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -20,6 +21,7 @@ from sklearn.preprocessing import KBinsDiscretizer
 
 from Module import (
     EvaluationConfig,
+    ExperimentTracker,
     GAConfig,
     GeneticFeatureSelector,
     PreprocessingConfig,
@@ -355,6 +357,38 @@ def explain_with_shap(
 
 def run_pipeline(args: argparse.Namespace) -> None:
     random_state = args.random_state
+    use_second_order = (
+        args.solver_backend == "custom" and args.solver_second_order == "bfgs"
+    )
+    method_label = "with_hessian" if use_second_order else "without_hessian"
+
+    resume_state = args.resume_from
+    run_name = args.run_name
+    if resume_state is None and not args.force_new_run:
+        auto_state = ExperimentTracker.find_latest_state(args.data_path, method_label)
+        if auto_state is not None:
+            print(f"[Tracker] Resuming from state file: {auto_state}")
+            resume_state = auto_state
+            run_name = None
+        elif args.run_name is None:
+            print("[Tracker] No existing run to resume; starting a new run.")
+
+    tracker = ExperimentTracker(
+        data_path=args.data_path,
+        method_label=method_label,
+        run_name=run_name,
+        resume_state=resume_state,
+    )
+
+    tracker.log_event(
+        "pipeline",
+        "Run initialised",
+        {
+            "solver_backend": args.solver_backend,
+            "solver_method": args.solver_method,
+            "second_order": args.solver_second_order,
+        },
+    )
 
     preprocessing_config = PreprocessingConfig(
         target_column=args.target_column,
@@ -367,197 +401,396 @@ def run_pipeline(args: argparse.Namespace) -> None:
         beta_cost=args.cost_beta,
     )
 
-    data = load_and_preprocess(args.data_path, preprocessing_config)
+    try:
+        # ------------------------------------------------------------------
+        # Stage: Preprocessing
+        # ------------------------------------------------------------------
+        if tracker.is_completed("preprocessing"):
+            tracker.log_event("preprocessing", "Loading cached preprocessing outputs")
+            data = tracker.load_preprocessing()
+        else:
+            tracker.log_event("preprocessing", "Starting preprocessing")
+            data = load_and_preprocess(args.data_path, preprocessing_config)
+            tracker.save_preprocessing(data)
+            tracker.log_event(
+                "preprocessing",
+                "Completed preprocessing",
+                {
+                    "train_resampled_rows": len(data["X_train_res"]),
+                    "val_rows": len(data["X_val_scaled"]),
+                    "test_rows": len(data["X_test_scaled"]),
+                },
+            )
 
-    pca_scores = compute_pca_scores(data["X_train_res"], random_state=random_state)
-    mi_scores = compute_mutual_information_scores(
-        data["X_train_res"],
-        data["y_train_res"],
-        random_state=random_state,
-    )
-    rf_scores = compute_random_forest_scores(
-        data["X_train_res"],
-        data["y_train_res"],
-        random_state=random_state,
-    )
+        # ------------------------------------------------------------------
+        # Stage: Feature Scoring
+        # ------------------------------------------------------------------
+        ensemble_weights = {
+            "pca": args.weight_pca,
+            "mutual_info": args.weight_mi,
+            "random_forest": args.weight_rf,
+        }
+        if tracker.is_completed("feature_scoring"):
+            tracker.log_event("feature_scoring", "Loading cached feature scores")
+            scores = tracker.load_feature_scores()
+            pca_scores = scores["pca"]
+            mi_scores = scores["mi"]
+            rf_scores = scores["rf"]
+            ensemble_scores = scores["ensemble"]
+        else:
+            tracker.log_event("feature_scoring", "Computing feature importance scores")
+            pca_scores = compute_pca_scores(data["X_train_res"], random_state=random_state)
+            mi_scores = compute_mutual_information_scores(
+                data["X_train_res"],
+                data["y_train_res"],
+                random_state=random_state,
+            )
+            rf_scores = compute_random_forest_scores(
+                data["X_train_res"],
+                data["y_train_res"],
+                random_state=random_state,
+            )
 
-    ensemble_weights = {
-        "pca": args.weight_pca,
-        "mutual_info": args.weight_mi,
-        "random_forest": args.weight_rf,
-    }
+            ensemble_scores = information_theoretic_ensemble_scores(
+                {"pca": pca_scores, "mutual_info": mi_scores, "random_forest": rf_scores},
+                ensemble_weights,
+            )
+            tracker.save_feature_scores(pca_scores, mi_scores, rf_scores, ensemble_scores)
+            tracker.log_event(
+                "feature_scoring",
+                "Feature scoring completed",
+                {"num_features": len(ensemble_scores)},
+            )
 
-    ensemble_scores = information_theoretic_ensemble_scores(
-        {"pca": pca_scores, "mutual_info": mi_scores, "random_forest": rf_scores},
-        ensemble_weights,
-    )
+        # ------------------------------------------------------------------
+        # Stage: Redundancy minimisation
+        # ------------------------------------------------------------------
+        if tracker.is_completed("redundancy"):
+            tracker.log_event("redundancy", "Loading cached redundancy analysis")
+            redundancy_data = tracker.load_redundancy()
+            penalty_matrix = redundancy_data["penalty_matrix"]
+            candidate_features = redundancy_data["candidate_features"]
+        else:
+            tracker.log_event("redundancy", "Computing redundancy penalty matrix")
+            penalty_weights = {
+                "cmi": args.penalty_weight_cmi,
+                "corr": args.penalty_weight_corr,
+                "vif": args.penalty_weight_vif,
+            }
+            penalty_matrix = build_redundancy_penalty_matrix(
+                data["X_train_res"],
+                data["y_train_res"],
+                penalty_weights,
+            )
 
-    penalty_weights = {
-        "cmi": args.penalty_weight_cmi,
-        "corr": args.penalty_weight_corr,
-        "vif": args.penalty_weight_vif,
-    }
-    penalty_matrix = build_redundancy_penalty_matrix(
-        data["X_train_res"],
-        data["y_train_res"],
-        penalty_weights,
-    )
+            candidate_features = redundancy_aware_selection(
+                ensemble_scores,
+                penalty_matrix,
+                ensemble_scores,
+                budget=args.redundancy_budget,
+                min_features=args.min_candidate_features,
+            )
+            tracker.save_redundancy(penalty_matrix, candidate_features)
+            tracker.log_event(
+                "redundancy",
+                "Candidate feature set generated",
+                {"num_candidates": len(candidate_features)},
+            )
 
-    candidate_features = redundancy_aware_selection(
-        ensemble_scores,
-        penalty_matrix,
-        ensemble_scores,
-        budget=args.redundancy_budget,
-        min_features=args.min_candidate_features,
-    )
-
-    print(f"[Pipeline] Candidate features after redundancy-aware selection: {len(candidate_features)}")
-
-    fitness_fn = make_cost_sensitive_fitness(
-        feature_names=candidate_features,
-        ensemble_weights=ensemble_scores,
-        penalty_matrix=penalty_matrix,
-        lambda_penalty=args.lambda_penalty,
-        alpha_size=args.alpha_size,
-        cost_beta=args.cost_beta,
-        random_state=random_state,
-        cv_splits=args.ga_cv_splits,
-    )
-
-    estimator = LogisticRegression(
-        max_iter=1500,
-        solver="lbfgs",
-        class_weight=None,
-        random_state=random_state,
-    )
-
-    ga_config = GAConfig(
-        population_size=args.ga_population,
-        generations=args.ga_generations,
-        mutation_prob=args.ga_mutation,
-        min_features=min(args.ga_min_features, len(candidate_features)),
-        max_features=len(candidate_features),
-        random_state=random_state,
-    )
-
-    selector = GeneticFeatureSelector(
-        estimator=estimator,
-        config=ga_config,
-        verbose=not args.ga_quiet,
-        fitness_function=fitness_fn,
-    )
-
-    selector.fit(data["X_train_res"][candidate_features], data["y_train_res"])
-    selected_features = selector.get_feature_names()
-
-    redundancy_penalty = compute_subset_penalty(selected_features, penalty_matrix, ensemble_scores)
-
-    print(f"[GA] Selected features ({len(selected_features)}): {selected_features}")
-    print(f"[GA] Best fitness score: {selector.best_score_:.4f}")
-    print(f"[GA] Redundancy penalty: {redundancy_penalty:.4f}")
-
-    train_weights = compute_sample_weights(data["y_train_res"], args.cost_beta)
-
-    if args.solver_backend == "custom":
-        solver_config = SolverConfig(
-            max_iter=args.solver_max_iter,
-            learning_rate=args.solver_lr,
-            tolerance=args.solver_tol,
-            momentum=args.solver_momentum,
-            verbose=args.solver_verbose,
-            track_history=args.solver_track_history,
-            method=args.solver_method,
-            line_search=args.solver_line_search,
-            line_search_alpha=args.solver_line_alpha,
-            line_search_beta=args.solver_line_beta,
-            adam_beta1=args.solver_adam_beta1,
-            adam_beta2=args.solver_adam_beta2,
-            adam_epsilon=args.solver_adam_epsilon,
-            second_order_method=args.solver_second_order,
-        )
-
-        solver_output = solve_cost_sensitive_logistic(
-            data["X_train_res"][selected_features],
-            data["y_train_res"],
-            train_weights,
-            solver_config,
-        )
-
-        weights = solver_output["weights"]
-        bias = solver_output["bias"]
         print(
-            f"[Solver] Converged in {solver_output['iterations']} iterations | "
-            f"Loss={solver_output['final_loss']:.6f}"
+            f"[Pipeline] Candidate features after redundancy-aware selection: {len(candidate_features)}"
         )
 
-        model = configure_sklearn_like_model(weights, bias, selected_features)
-        val_probabilities = solver_predict_proba(
-            data["X_val_scaled"][selected_features], weights, bias
+        # ------------------------------------------------------------------
+        # Stage: Genetic Algorithm
+        # ------------------------------------------------------------------
+        if tracker.is_completed("ga"):
+            tracker.log_event("ga", "Loading cached GA results")
+            ga_data = tracker.load_ga_results()
+            selected_features = ga_data["selected_features"]
+            ga_score = ga_data.get("best_score")
+            redundancy_penalty = ga_data.get("redundancy_penalty")
+        else:
+            tracker.log_event("ga", "Starting genetic algorithm optimisation")
+            fitness_fn = make_cost_sensitive_fitness(
+                feature_names=candidate_features,
+                ensemble_weights=ensemble_weights,
+                penalty_matrix=penalty_matrix,
+                lambda_penalty=args.lambda_penalty,
+                alpha_size=args.alpha_size,
+                cost_beta=args.cost_beta,
+                random_state=random_state,
+                cv_splits=args.ga_cv_splits,
+            )
+
+            estimator = LogisticRegression(
+                max_iter=1500,
+                solver="lbfgs",
+                class_weight=None,
+                random_state=random_state,
+            )
+
+            ga_config = GAConfig(
+                population_size=args.ga_population,
+                generations=args.ga_generations,
+                mutation_prob=args.ga_mutation,
+                min_features=min(args.ga_min_features, len(candidate_features)),
+                max_features=len(candidate_features),
+                random_state=random_state,
+            )
+
+            selector = GeneticFeatureSelector(
+                estimator=estimator,
+                config=ga_config,
+                verbose=not args.ga_quiet,
+                fitness_function=fitness_fn,
+            )
+
+            selector.fit(data["X_train_res"][candidate_features], data["y_train_res"])
+            selected_features = selector.get_feature_names()
+            ga_score = selector.best_score_
+            redundancy_penalty = compute_subset_penalty(selected_features, penalty_matrix, ensemble_weights)
+            tracker.save_ga_results(
+                selected_features,
+                ga_score,
+                history=selector.history_,
+                redundancy_penalty=redundancy_penalty,
+            )
+            tracker.log_event(
+                "ga",
+                "Genetic algorithm completed",
+                {
+                    "selected_features": len(selected_features),
+                    "best_score": ga_score,
+                    "redundancy_penalty": redundancy_penalty,
+                },
+            )
+
+        if redundancy_penalty is None:
+            redundancy_penalty = compute_subset_penalty(selected_features, penalty_matrix, ensemble_weights)
+
+        print(f"[GA] Selected features ({len(selected_features)}): {selected_features}")
+        if ga_score is not None:
+            print(f"[GA] Best fitness score: {ga_score:.4f}")
+        print(f"[GA] Redundancy penalty: {redundancy_penalty:.4f}")
+
+        # ------------------------------------------------------------------
+        # Stage: Solver optimisation
+        # ------------------------------------------------------------------
+        train_weights = compute_sample_weights(data["y_train_res"], args.cost_beta)
+        weights: Optional[np.ndarray] = None
+        bias: Optional[float] = None
+        threshold: float
+        val_score: float
+
+        if tracker.is_completed("solver"):
+            tracker.log_event("solver", "Loading cached solver outputs")
+            solver_results = tracker.load_solver_results()
+            threshold = solver_results["threshold"]
+            val_score = solver_results["val_score"]
+            solver_backend = solver_results["backend"]
+            solver_details = solver_results["solver_details"]
+
+            if solver_backend == "custom":
+                weights = solver_results["weights"]
+                bias = solver_results["bias"]
+                model = configure_sklearn_like_model(weights, bias, selected_features)
+            else:
+                model = solver_results["model"]
+        else:
+            tracker.log_event("solver", "Training final classifier")
+            if args.solver_backend == "custom":
+                solver_config = SolverConfig(
+                    max_iter=args.solver_max_iter,
+                    learning_rate=args.solver_lr,
+                    tolerance=args.solver_tol,
+                    momentum=args.solver_momentum,
+                    verbose=args.solver_verbose,
+                    track_history=args.solver_track_history,
+                    method=args.solver_method,
+                    line_search=args.solver_line_search,
+                    line_search_alpha=args.solver_line_alpha,
+                    line_search_beta=args.solver_line_beta,
+                    adam_beta1=args.solver_adam_beta1,
+                    adam_beta2=args.solver_adam_beta2,
+                    adam_epsilon=args.solver_adam_epsilon,
+                    second_order_method=args.solver_second_order,
+                )
+
+                solver_output = solve_cost_sensitive_logistic(
+                    data["X_train_res"][selected_features],
+                    data["y_train_res"],
+                    train_weights,
+                    solver_config,
+                )
+
+                weights = solver_output["weights"]
+                bias = solver_output["bias"]
+                print(
+                    f"[Solver] Converged in {solver_output['iterations']} iterations | "
+                    f"Loss={solver_output['final_loss']:.6f}"
+                )
+
+                model = configure_sklearn_like_model(weights, bias, selected_features)
+                val_probabilities = solver_predict_proba(
+                    data["X_val_scaled"][selected_features], weights, bias
+                )
+                solver_backend = "custom"
+                solver_details = {
+                    "method": args.solver_method,
+                    "second_order": args.solver_second_order,
+                    "iterations": solver_output["iterations"],
+                }
+            else:
+                model = LogisticRegression(
+                    max_iter=2000,
+                    solver="lbfgs",
+                    class_weight=None,
+                    random_state=random_state,
+                )
+                model.fit(
+                    data["X_train_res"][selected_features],
+                    data["y_train_res"],
+                    sample_weight=train_weights,
+                )
+                val_probabilities = model.predict_proba(
+                    data["X_val_scaled"][selected_features]
+                )[:, 1]
+                solver_backend = "sklearn"
+                solver_details = {"solver": "lbfgs"}
+
+            if args.solver_backend == "custom":
+                val_weights = compute_sample_weights(data["y_val"], args.cost_beta)
+                threshold, val_score = optimise_threshold(
+                    data["y_val"],
+                    val_probabilities,
+                    beta=args.beta,
+                    sample_weight=val_weights,
+                )
+            else:
+                val_weights = compute_sample_weights(data["y_val"], args.cost_beta)
+                threshold, val_score = optimise_threshold(
+                    data["y_val"],
+                    val_probabilities,
+                    beta=args.beta,
+                    sample_weight=val_weights,
+                )
+
+            tracker.save_solver_results(
+                solver_backend,
+                weights,
+                bias,
+                threshold,
+                val_score,
+                solver_details,
+                model=model if solver_backend == "sklearn" else None,
+            )
+            tracker.log_event(
+                "solver",
+                "Solver optimisation completed",
+                {"threshold": threshold, "val_score": val_score, "backend": solver_backend},
+            )
+
+        print(f"[Solver] Optimal decision threshold: {threshold:.3f} (F{args.beta:.1f}={val_score:.4f})")
+
+        # ------------------------------------------------------------------
+        # Stage: Evaluation
+        # ------------------------------------------------------------------
+        if tracker.is_completed("evaluation"):
+            tracker.log_event("evaluation", "Loading cached evaluation results")
+            evaluation = tracker.load_evaluation()
+        else:
+            tracker.log_event("evaluation", "Evaluating on test data")
+            if solver_backend == "custom":
+                if weights is None or bias is None:
+                    solver_results = tracker.load_solver_results()
+                    weights = solver_results["weights"]
+                    bias = solver_results["bias"]
+                test_probabilities = solver_predict_proba(
+                    data["X_test_scaled"][selected_features], weights, bias
+                )
+            else:
+                test_probabilities = model.predict_proba(
+                    data["X_test_scaled"][selected_features]
+                )[:, 1]
+            test_predictions = (test_probabilities >= threshold).astype(int)
+
+            evaluation_config = EvaluationConfig(
+                beta=args.beta,
+                rho_auc=args.rho_auc,
+                rho_f1=args.rho_f1,
+                rho_pr=args.rho_pr,
+                rho_gmean=args.rho_gmean,
+                lambda_penalty=args.lambda_penalty,
+                alpha_size=args.alpha_size,
+            )
+
+            evaluation = evaluate_model(
+                data["y_test"],
+                test_probabilities,
+                test_predictions,
+                evaluation_config,
+                redundancy_penalty,
+                len(selected_features),
+            )
+            tracker.save_evaluation(evaluation)
+            tracker.log_event(
+                "evaluation",
+                "Evaluation completed",
+                {
+                    "roc_auc": evaluation["roc_auc"],
+                    "pr_auc": evaluation["pr_auc"],
+                    "overall_score": evaluation["overall_score"],
+                },
+            )
+
+        print(f"[Evaluation] Test ROC-AUC: {evaluation['roc_auc']:.4f}")
+        print(f"[Evaluation] Test PR-AUC: {evaluation['pr_auc']:.4f}")
+        print(
+            f"[Evaluation] Cost-sensitive summary: {format_cost_sensitive_summary(evaluation['cost_sensitive'])}"
         )
-    else:
-        model = LogisticRegression(
-            max_iter=2000,
-            solver="lbfgs",
-            class_weight=None,
-            random_state=random_state,
+        print(f"[Evaluation] Overall score: {evaluation['overall_score']:.4f}")
+        print("[Evaluation] Classification report:\n" + evaluation["classification_report"])
+        print("[Evaluation] Confusion matrix:\n", evaluation["confusion_matrix"])
+
+        if not args.skip_explainability:
+            explain_with_shap(model, data["X_test_scaled"][selected_features], selected_features)
+
+        tracker.mark_status("completed")
+        tracker.log_event("pipeline", "Run completed successfully")
+        print(f"[Tracker] Results saved to {tracker.result_dir}")
+        print(f"[Tracker] Logs saved to {tracker.log_dir}")
+
+    except KeyboardInterrupt:
+        tracker.log_event("pipeline", "Run interrupted by user", level=logging.WARNING)
+        tracker.mark_status("interrupted")
+        raise
+    except Exception as exc:
+        tracker.log_event(
+            "pipeline",
+            "Run failed",
+            {"error": str(exc)},
+            level=logging.ERROR,
         )
-        model.fit(
-            data["X_train_res"][selected_features],
-            data["y_train_res"],
-            sample_weight=train_weights,
-        )
-        val_probabilities = model.predict_proba(data["X_val_scaled"][selected_features])[:, 1]
-    val_weights = compute_sample_weights(data["y_val"], args.cost_beta)
-    threshold, val_score = optimise_threshold(
-        data["y_val"],
-        val_probabilities,
-        beta=args.beta,
-        sample_weight=val_weights,
-    )
-
-    print(f"[Solver] Optimal decision threshold: {threshold:.3f} (F{args.beta:.1f}={val_score:.4f})")
-
-    if args.solver_backend == "custom":
-        test_probabilities = solver_predict_proba(
-            data["X_test_scaled"][selected_features], weights, bias
-        )
-    else:
-        test_probabilities = model.predict_proba(data["X_test_scaled"][selected_features])[:, 1]
-    test_predictions = (test_probabilities >= threshold).astype(int)
-
-    evaluation_config = EvaluationConfig(
-        beta=args.beta,
-        rho_auc=args.rho_auc,
-        rho_f1=args.rho_f1,
-        rho_pr=args.rho_pr,
-        rho_gmean=args.rho_gmean,
-        lambda_penalty=args.lambda_penalty,
-        alpha_size=args.alpha_size,
-    )
-
-    evaluation = evaluate_model(
-        data["y_test"],
-        test_probabilities,
-        test_predictions,
-        evaluation_config,
-        redundancy_penalty,
-        len(selected_features),
-    )
-
-    print(f"[Evaluation] Test ROC-AUC: {evaluation['roc_auc']:.4f}")
-    print(f"[Evaluation] Test PR-AUC: {evaluation['pr_auc']:.4f}")
-    print(f"[Evaluation] Cost-sensitive summary: {format_cost_sensitive_summary(evaluation['cost_sensitive'])}")
-    print(f"[Evaluation] Overall score: {evaluation['overall_score']:.4f}")
-    print("[Evaluation] Classification report:\n" + evaluation["classification_report"])
-    print("[Evaluation] Confusion matrix:\n", evaluation["confusion_matrix"])
-
-    if not args.skip_explainability:
-        explain_with_shap(model, data["X_test_scaled"][selected_features], selected_features)
+        tracker.mark_status("failed")
+        raise
 
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Information-theoretic ensemble fraud detection pipeline")
     parser.add_argument("--data-path", type=Path, required=True, help="Path to the credit card fraud dataset (CSV).")
+    parser.add_argument("--run-name", type=str, default=None, help="Optional identifier used for result/log directory names.")
+    parser.add_argument(
+        "--resume-from",
+        type=Path,
+        default=None,
+        help="Path to a previous run directory or state.json file to resume from.",
+    )
+    parser.add_argument(
+        "--force-new-run",
+        action="store_true",
+        help="Ignore existing states and always start a new run.",
+    )
     parser.add_argument("--target-column", type=str, default="Class", help="Name of the target column in the dataset.")
     parser.add_argument("--test-size", type=float, default=0.2, help="Proportion reserved for the test split.")
     parser.add_argument("--validation-size", type=float, default=0.2, help="Validation split fraction from the training pool.")
