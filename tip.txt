@@ -43,15 +43,6 @@ pipenv run python main.py --data-path ..\Data\creditcard\creditcard.csv [추가 
 
 2. run
 
-diff 화면은 Cursor에서 자동으로 띄워 주지 않으면 제가 조작할 수 없어요. 대신 아래 단축키를 기억해 주세요.
-
-- `Ctrl+Shift+Y` : 현재 파일의 변경사항을 좌우 비교(초록/빨강)로 띄웁니다. 여기서 `Accept`/`Reject` 버튼을 바로 눌러 적용할 수 있어요.  
-- `Ctrl+N` : 방금 적용한 변경 하나를 즉시 되돌립니다.
-
-이렇게 열어 놓은 상태에서 제 변경을 확인하고 원하는 부분만 수락·되돌릴 수 있습니다.
-
----
-
 ### 실행 방법
 
 1. (선택) 가상환경 생성·의존성 설치  
@@ -81,3 +72,14 @@ diff 화면은 Cursor에서 자동으로 띄워 주지 않으면 제가 조작�
    - 필요하면 `--solver-lr`, `--solver-max-iter`, `--solver-momentum` 등도 조정하세요.
 
 실행 후 콘솔에 GA 진행 로그, 솔버 수렴 정보, 평가 결과(ROC-AUC, PR-AUC, cost-sensitive 리포트 등)가 출력됩니다.
+
+- `main.py`는 이제 기본적으로 커스텀 솔버를 사용합니다. 별도 옵션을 주지 않으면 `SolverConfig`와 `gradient_descent_cost_sensitive/bfgs_cost_sensitive` 경로가 실행됩니다.  
+  다른 백엔드가 필요하면 `--solver-backend sklearn`을 명령행에 지정하세요.
+
+- 6장(헤시안/준-뉴턴) 기능은 `--solver-second-order` 인자로 제어합니다.  
+  - 기본값 `none`: 1차(Gradient/Momentum/Nesterov/Adam) 기반  
+  - `--solver-second-order bfgs`: BFGS 근사 헤시안으로 업데이트  
+
+  나머지 1~5장 기법(라인 서치, 모멘텀, Adam 등)은 `--solver-method`, `--solver-line-search` 등의 정보로 구성되어 있어 상황에 따라 조합할 수 있습니다.
+
+즉, 실행 기본은 커스텀 솔버이며, 필요 시 `--solver-backend sklearn`으로 scikit-learn 로지스틱으로 전환하고, 6장 내용을 적용하려면 `--solver-second-order bfgs`를 덧붙이면 됩니다.

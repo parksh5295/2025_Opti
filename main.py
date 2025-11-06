@@ -458,7 +458,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
 
     train_weights = compute_sample_weights(data["y_train_res"], args.cost_beta)
 
-    if args.use_solver:
+    if args.solver_backend == "custom":
         solver_config = SolverConfig(
             max_iter=args.solver_max_iter,
             learning_rate=args.solver_lr,
@@ -517,7 +517,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
 
     print(f"[Solver] Optimal decision threshold: {threshold:.3f} (F{args.beta:.1f}={val_score:.4f})")
 
-    if args.use_solver:
+    if args.solver_backend == "custom":
         test_probabilities = solver_predict_proba(
             data["X_test_scaled"][selected_features], weights, bias
         )
@@ -586,7 +586,13 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--rho-f1", type=float, default=0.25, help="Weight for cost-sensitive F1 in the overall evaluation score.")
     parser.add_argument("--rho-pr", type=float, default=0.2, help="Weight for PR-AUC in the overall evaluation score.")
     parser.add_argument("--rho-gmean", type=float, default=0.1, help="Weight for G-mean in the overall evaluation score.")
-    parser.add_argument("--use-solver", action="store_true", help="Train final logistic model with custom solver instead of scikit-learn.")
+    parser.add_argument(
+        "--solver-backend",
+        type=str,
+        default="custom",
+        choices=["custom", "sklearn"],
+        help="Backend used for optimising logistic parameters (default: custom solver).",
+    )
     parser.add_argument("--solver-max-iter", type=int, default=400, help="Maximum iterations for the custom solver.")
     parser.add_argument("--solver-lr", type=float, default=0.1, help="Learning rate for the custom solver.")
     parser.add_argument("--solver-tol", type=float, default=1e-5, help="Tolerance for solver convergence.")
