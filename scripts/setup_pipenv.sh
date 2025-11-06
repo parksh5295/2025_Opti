@@ -4,6 +4,8 @@
 set -euo pipefail
 
 INSTALL_PIPENV=0
+INSTALL_PYENV=0
+PYTHON_VERSION="3.11.1"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -11,9 +13,17 @@ while [[ $# -gt 0 ]]; do
             INSTALL_PIPENV=1
             shift
             ;;
+        --install-pyenv)
+            INSTALL_PYENV=1
+            shift
+            ;;
+        --python-version)
+            PYTHON_VERSION="$2"
+            shift 2
+            ;;
         *)
             echo "[pipenv] Unknown option: $1" >&2
-            echo "Usage: $0 [--install-pipenv]" >&2
+            echo "Usage: $0 [--install-pipenv] [--install-pyenv] [--python-version X.Y.Z]" >&2
             exit 1
             ;;
     esac
@@ -27,13 +37,43 @@ if [[ $INSTALL_PIPENV -eq 1 ]]; then
     python3 -m pip install --upgrade --user pipenv
 fi
 
+if [[ $INSTALL_PYENV -eq 1 ]]; then
+    if ! command -v pyenv >/dev/null 2>&1; then
+        echo "[pipenv] Installing pyenv..."
+        curl https://pyenv.run | bash
+        export PATH="$HOME/.pyenv/bin:$PATH"
+        eval "$(pyenv init -)"
+        eval "$(pyenv virtualenv-init -)"
+    else
+        echo "[pipenv] pyenv already installed."
+        export PATH="$HOME/.pyenv/bin:$PATH"
+        eval "$(pyenv init -)"
+        eval "$(pyenv virtualenv-init -)"
+    fi
+
+    if ! pyenv versions --bare | grep -q "^${PYTHON_VERSION}$"; then
+        echo "[pipenv] Installing Python ${PYTHON_VERSION} via pyenv..."
+        pyenv install "$PYTHON_VERSION"
+    else
+        echo "[pipenv] Python ${PYTHON_VERSION} already installed in pyenv."
+    fi
+
+    export PIPENV_PYTHON="$HOME/.pyenv/versions/${PYTHON_VERSION}/bin/python"
+    echo "[pipenv] Using Python at $PIPENV_PYTHON"
+fi
+
 if ! command -v pipenv >/dev/null 2>&1; then
     echo "[pipenv] pipenv is not installed. Re-run with --install-pipenv or install manually." >&2
     exit 1
 fi
 
-echo "[pipenv] Installing dependencies from Pipfile..."
-pipenv install --dev
+if [[ -n "${PIPENV_PYTHON:-}" ]]; then
+    echo "[pipenv] Installing dependencies from Pipfile using Python ${PYTHON_VERSION}..."
+    pipenv install --dev --python "$PIPENV_PYTHON"
+else
+    echo "[pipenv] Installing dependencies from Pipfile..."
+    pipenv install --dev --python "${PYTHON_VERSION}"
+fi
 
 echo "[pipenv] Done. Activate with:"
 echo "    pipenv shell"

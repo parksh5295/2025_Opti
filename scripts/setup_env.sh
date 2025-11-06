@@ -5,6 +5,7 @@ set -euo pipefail
 
 ENV_DIR=".venv"
 RECREATE=0
+PYTHON_BIN="python3"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -16,9 +17,13 @@ while [[ $# -gt 0 ]]; do
             RECREATE=1
             shift
             ;;
+        --python)
+            PYTHON_BIN="$2"
+            shift 2
+            ;;
         *)
             echo "[setup-env] Unknown option: $1" >&2
-            echo "Usage: $0 [--env-dir PATH] [--recreate]" >&2
+            echo "Usage: $0 [--env-dir PATH] [--recreate] [--python PATH]" >&2
             exit 1
             ;;
     esac
@@ -34,7 +39,7 @@ fi
 
 if [[ ! -d "$ENV_DIR" ]]; then
     echo "[setup-env] Creating virtual environment..."
-    python3 -m venv "$ENV_DIR"
+    "$PYTHON_BIN" -m venv "$ENV_DIR"
 else
     echo "[setup-env] Reusing existing environment. Use --recreate to rebuild."
 fi
