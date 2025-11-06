@@ -6,6 +6,7 @@ set -euo pipefail
 INSTALL_PIPENV=0
 INSTALL_PYENV=0
 PYTHON_VERSION="3.11.1"
+FORCE_SHELL_INIT=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -21,9 +22,13 @@ while [[ $# -gt 0 ]]; do
             PYTHON_VERSION="$2"
             shift 2
             ;;
+        --force-shell-init)
+            FORCE_SHELL_INIT=1
+            shift
+            ;;
         *)
             echo "[pipenv] Unknown option: $1" >&2
-            echo "Usage: $0 [--install-pipenv] [--install-pyenv] [--python-version X.Y.Z]" >&2
+            echo "Usage: $0 [--install-pipenv] [--install-pyenv] [--python-version X.Y.Z] [--force-shell-init]" >&2
             exit 1
             ;;
     esac
@@ -62,6 +67,18 @@ if [[ $INSTALL_PYENV -eq 1 ]]; then
     echo "[pipenv] Using Python at $PIPENV_PYTHON"
 fi
 
+if [[ $FORCE_SHELL_INIT -eq 1 ]]; then
+    echo "[pipenv] Initialising pyenv for current shell..."
+    export PATH="$HOME/.pyenv/bin:$PATH"
+    eval "$(pyenv init -)"
+    eval "$(pyenv virtualenv-init -)"
+    if [[ -z "${PIPENV_PYTHON:-}" ]]; then
+        if pyenv versions --bare | grep -q "^${PYTHON_VERSION}$"; then
+            export PIPENV_PYTHON="$HOME/.pyenv/versions/${PYTHON_VERSION}/bin/python"
+        fi
+    fi
+fi
+
 if ! command -v pipenv >/dev/null 2>&1; then
     echo "[pipenv] pipenv is not installed. Re-run with --install-pipenv or install manually." >&2
     exit 1
@@ -73,6 +90,15 @@ if [[ -n "${PIPENV_PYTHON:-}" ]]; then
 else
     echo "[pipenv] Installing dependencies from Pipfile..."
     pipenv install --dev --python "${PYTHON_VERSION}"
+fi
+
+if [[ $FORCE_SHELL_INIT -eq 1 ]]; then
+    echo "[pipenv] Reminder: add the following to your shell profile (.bashrc or similar):"
+    cat <<'EOF'
+export PATH="$HOME/.pyenv/bin:$PATH"
+eval "$(pyenv init -)"
+eval "$(pyenv virtualenv-init -)"
+EOF
 fi
 
 echo "[pipenv] Done. Activate with:"
