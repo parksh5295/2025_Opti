@@ -1,0 +1,19 @@
+[3 tools called]
+
+- SHAP 기반 해석과 정보이론적 앙상블 흐름은 지금 구조로 충분합니다. 중복 페널티( CMI·VIF·상관계수 ), 비용 민감 NLL을 GA 적합도에 넣었고, 최종 평가는 비용 민감 지표와 페널티/규모 항을 모두 반영하도록 `Module` 하위에서 모듈화했습니다. 필요하면 SHAP을 옵션(`--skip-explainability`)으로 껐다 켤 수 있어요.
+
+- 요청하신 가상환경 세팅 스크립트와 의존성 목록을 추가했습니다.  
+  - `requirements.txt` : numpy, pandas, scikit-learn, scipy, imbalanced-learn, shap  
+  - PowerShell 스크립트 `scripts/setup_env.ps1` : `.venv` 생성/재생성, pip 업그레이드, 의존성 설치까지 자동화합니다.
+
+### 가상환경 사용 예시
+```
+powershell -ExecutionPolicy Bypass -File scripts/setup_env.ps1 -Recreate
+.\.venv\Scripts\Activate.ps1
+python main.py --data-path ..\Data\creditcard\creditcard.csv
+```
+(필요 시 `--skip-explainability`, `--weight-*`, `--lambda-penalty` 등 인자 조절)
+
+설정 후 `.\.venv\Scripts\Activate.ps1`만 실행하면 언제든 환경을 재사용할 수 있습니다.
+
+
