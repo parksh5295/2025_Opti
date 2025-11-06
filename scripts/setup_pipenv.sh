@@ -5,6 +5,7 @@ set -euo pipefail
 
 INSTALL_PIPENV=0
 INSTALL_PYENV=0
+RESET_PYENV=0
 PYTHON_VERSION="3.11.1"
 FORCE_SHELL_INIT=0
 
@@ -18,6 +19,10 @@ while [[ $# -gt 0 ]]; do
             INSTALL_PYENV=1
             shift
             ;;
+        --reset-pyenv)
+            RESET_PYENV=1
+            shift
+            ;;
         --python-version)
             PYTHON_VERSION="$2"
             shift 2
@@ -28,7 +33,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo "[pipenv] Unknown option: $1" >&2
-            echo "Usage: $0 [--install-pipenv] [--install-pyenv] [--python-version X.Y.Z] [--force-shell-init]" >&2
+            echo "Usage: $0 [--install-pipenv] [--install-pyenv] [--reset-pyenv] [--python-version X.Y.Z] [--force-shell-init]" >&2
             exit 1
             ;;
     esac
@@ -43,6 +48,11 @@ if [[ $INSTALL_PIPENV -eq 1 ]]; then
 fi
 
 if [[ $INSTALL_PYENV -eq 1 ]]; then
+    if [[ $RESET_PYENV -eq 1 && -d "$HOME/.pyenv" ]]; then
+        echo "[pipenv] Removing existing pyenv at $HOME/.pyenv..."
+        rm -rf "$HOME/.pyenv"
+    fi
+
     if ! command -v pyenv >/dev/null 2>&1; then
         echo "[pipenv] Installing pyenv..."
         curl https://pyenv.run | bash
