@@ -61,5 +61,36 @@ def cost_sensitive_nll_gradient(
     return grad_w, grad_b
 
 
-__all__ = ["sigmoid", "cost_sensitive_nll", "cost_sensitive_nll_gradient"]
+def cost_sensitive_nll_full(
+    theta: np.ndarray,
+    X_augmented: np.ndarray,
+    y: np.ndarray,
+    sample_weight: np.ndarray,
+) -> Tuple[float, np.ndarray]:
+    """Loss and gradient for combined parameter vector (weights + bias)."""
+
+    z = X_augmented @ theta
+    probabilities = sigmoid(z)
+    eps = 1e-9
+    probs = np.clip(probabilities, eps, 1.0 - eps)
+
+    losses = -(
+        y * np.log(probs)
+        + (1.0 - y) * np.log(1.0 - probs)
+    )
+    weighted_losses = sample_weight * losses
+    loss = float(np.sum(weighted_losses) / np.sum(sample_weight))
+
+    residual = (probabilities - y) * sample_weight
+    denom = np.sum(sample_weight)
+    grad = (X_augmented.T @ residual) / denom
+    return loss, grad
+
+
+__all__ = [
+    "sigmoid",
+    "cost_sensitive_nll",
+    "cost_sensitive_nll_gradient",
+    "cost_sensitive_nll_full",
+]
 

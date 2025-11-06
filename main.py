@@ -466,6 +466,14 @@ def run_pipeline(args: argparse.Namespace) -> None:
             momentum=args.solver_momentum,
             verbose=args.solver_verbose,
             track_history=args.solver_track_history,
+            method=args.solver_method,
+            line_search=args.solver_line_search,
+            line_search_alpha=args.solver_line_alpha,
+            line_search_beta=args.solver_line_beta,
+            adam_beta1=args.solver_adam_beta1,
+            adam_beta2=args.solver_adam_beta2,
+            adam_epsilon=args.solver_adam_epsilon,
+            second_order_method=args.solver_second_order,
         )
 
         solver_output = solve_cost_sensitive_logistic(
@@ -583,6 +591,26 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--solver-lr", type=float, default=0.1, help="Learning rate for the custom solver.")
     parser.add_argument("--solver-tol", type=float, default=1e-5, help="Tolerance for solver convergence.")
     parser.add_argument("--solver-momentum", type=float, default=0.0, help="Momentum term for solver gradient descent.")
+    parser.add_argument(
+        "--solver-method",
+        type=str,
+        default="gd",
+        choices=["gd", "momentum", "nesterov", "adam"],
+        help="First-order optimisation variant to use.",
+    )
+    parser.add_argument("--solver-line-search", action="store_true", help="Enable backtracking line search.")
+    parser.add_argument("--solver-line-alpha", type=float, default=0.3, help="Armijo alpha parameter for line search.")
+    parser.add_argument("--solver-line-beta", type=float, default=0.8, help="Backtracking decay factor for line search.")
+    parser.add_argument("--solver-adam-beta1", type=float, default=0.9, help="Adam beta1 parameter.")
+    parser.add_argument("--solver-adam-beta2", type=float, default=0.999, help="Adam beta2 parameter.")
+    parser.add_argument("--solver-adam-epsilon", type=float, default=1e-8, help="Adam epsilon parameter.")
+    parser.add_argument(
+        "--solver-second-order",
+        type=str,
+        default="none",
+        choices=["none", "bfgs"],
+        help="Enable quasi-Newton optimisation (BFGS).",
+    )
     parser.add_argument("--solver-verbose", action="store_true", help="Print solver progress information.")
     parser.add_argument("--solver-track-history", action="store_true", help="Record loss history during solver optimisation.")
     parser.add_argument("--skip-explainability", action="store_true", help="Skip SHAP-based explainability step.")

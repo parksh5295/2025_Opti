@@ -8,7 +8,12 @@ from typing import Dict
 import numpy as np
 import pandas as pd
 
-from Solver import GradientDescentConfig, gradient_descent_cost_sensitive, sigmoid
+from Solver import (
+    GradientDescentConfig,
+    bfgs_cost_sensitive,
+    gradient_descent_cost_sensitive,
+    sigmoid,
+)
 
 
 @dataclass
@@ -19,6 +24,14 @@ class SolverConfig:
     momentum: float = 0.0
     verbose: bool = False
     track_history: bool = False
+    method: str = "gd"
+    line_search: bool = False
+    line_search_alpha: float = 0.3
+    line_search_beta: float = 0.8
+    adam_beta1: float = 0.9
+    adam_beta2: float = 0.999
+    adam_epsilon: float = 1e-8
+    second_order_method: str = "none"  # "none" or "bfgs"
 
 
 def solve_cost_sensitive_logistic(
@@ -39,14 +52,31 @@ def solve_cost_sensitive_logistic(
         momentum=config.momentum,
         verbose=config.verbose,
         track_history=config.track_history,
+        method=config.method,
+        line_search=config.line_search,
+        line_search_alpha=config.line_search_alpha,
+        line_search_beta=config.line_search_beta,
+        adam_beta1=config.adam_beta1,
+        adam_beta2=config.adam_beta2,
+        adam_epsilon=config.adam_epsilon,
+        use_second_order=config.second_order_method.lower() != "none",
+        second_order_method=config.second_order_method.lower(),
     )
 
-    result = gradient_descent_cost_sensitive(
-        X=X_array,
-        y=y_array,
-        sample_weight=sample_weight.astype(float),
-        config=gd_config,
-    )
+    if gd_config.use_second_order and gd_config.second_order_method == "bfgs":
+        result = bfgs_cost_sensitive(
+            X=X_array,
+            y=y_array,
+            sample_weight=sample_weight.astype(float),
+            config=gd_config,
+        )
+    else:
+        result = gradient_descent_cost_sensitive(
+            X=X_array,
+            y=y_array,
+            sample_weight=sample_weight.astype(float),
+            config=gd_config,
+        )
 
     return result
 

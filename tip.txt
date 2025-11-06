@@ -1,4 +1,6 @@
-[3 tools called]
+1. virtual env
+
+[venv]
 
 - SHAP 기반 해석과 정보이론적 앙상블 흐름은 지금 구조로 충분합니다. 중복 페널티( CMI·VIF·상관계수 ), 비용 민감 NLL을 GA 적합도에 넣었고, 최종 평가는 비용 민감 지표와 페널티/규모 항을 모두 반영하도록 `Module` 하위에서 모듈화했습니다. 필요하면 SHAP을 옵션(`--skip-explainability`)으로 껐다 켤 수 있어요.
 
@@ -17,3 +19,65 @@ python main.py --data-path ..\Data\creditcard\creditcard.csv
 설정 후 `.\.venv\Scripts\Activate.ps1`만 실행하면 언제든 환경을 재사용할 수 있습니다.
 
 
+[pipenv]
+
+[2 tools called]
+
+- 현재 파이프라인은 GA + 로지스틱 회귀 + 커스텀 솔버로 전부 CPU 기반입니다. 행렬 곱 정도라 GPU가 있어도 사용하지 않으며, CPU로 충분합니다.  
+- `Pipfile`와 `scripts/setup_pipenv.ps1`을 추가해서 pipenv 워크플로를 바로 쓸 수 있게 했어요.  
+
+### pipenv 사용 절차
+```
+cd C:\Users\SAMSUNG\Desktop\2025_Optimization Theory\project\2025_Opti
+powershell -ExecutionPolicy Bypass -File scripts\setup_pipenv.ps1 -InstallPipenv   # 처음 한 번
+pipenv shell
+pipenv run python main.py --data-path ..\Data\creditcard\creditcard.csv [추가 옵션]
+```
+- `pipenv shell`로 들어가면 `python main.py ...`만 실행해도 됩니다.  
+- `Pipfile`에는 기존 `requirements.txt`와 동일한 의존성을 넣어 두었습니다. 필요하면 `pipenv install shap==0.44.0`처럼 버전을 고정해 추가 설치할 수 있어요.  
+
+기존 `.venv` 워크플로도 그대로 둘 수 있고, 이제는 pipenv/pyenv 기반으로도 손쉽게 가져다 쓸 수 있습니다.
+
+
+
+
+2. run
+
+diff 화면은 Cursor에서 자동으로 띄워 주지 않으면 제가 조작할 수 없어요. 대신 아래 단축키를 기억해 주세요.
+
+- `Ctrl+Shift+Y` : 현재 파일의 변경사항을 좌우 비교(초록/빨강)로 띄웁니다. 여기서 `Accept`/`Reject` 버튼을 바로 눌러 적용할 수 있어요.  
+- `Ctrl+N` : 방금 적용한 변경 하나를 즉시 되돌립니다.
+
+이렇게 열어 놓은 상태에서 제 변경을 확인하고 원하는 부분만 수락·되돌릴 수 있습니다.
+
+---
+
+### 실행 방법
+
+1. (선택) 가상환경 생성·의존성 설치  
+   ```
+   powershell -ExecutionPolicy Bypass -File scripts/setup_env.ps1
+   .\.venv\Scripts\Activate.ps1
+   ```
+   혹은 기존 환경을 재사용하면 `.venv` 활성화만 하시면 됩니다.
+
+2. 파이프라인 실행  
+   ```
+   python main.py --data-path ..\Data\creditcard\creditcard.csv
+   ```
+   기본은 scikit-learn 로지스틱을 사용합니다.
+
+3. 커스텀 솔버를 쓰려면 예를 들어:
+   ```
+   python main.py --data-path ..\Data\creditcard\creditcard.csv ^
+                  --use-solver ^
+                  --solver-method adam ^
+                  --solver-line-search ^
+                  --solver-second-order none
+   ```
+   - `--solver-method {gd, momentum, nesterov, adam}`
+   - `--solver-line-search` 켜면 백트래킹 라인 서치 사용
+   - `--solver-second-order bfgs`로 주면 준-뉴턴(BFGS) 사용
+   - 필요하면 `--solver-lr`, `--solver-max-iter`, `--solver-momentum` 등도 조정하세요.
+
+실행 후 콘솔에 GA 진행 로그, 솔버 수렴 정보, 평가 결과(ROC-AUC, PR-AUC, cost-sensitive 리포트 등)가 출력됩니다.
