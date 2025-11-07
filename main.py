@@ -409,11 +409,29 @@ def run_pipeline(args: argparse.Namespace) -> None:
 
     reuse_ga_data = None
     if args.reuse_ga_run:
-        reuse_method = args.reuse_ga_method or method_label
+        if args.reuse_ga_method:
+            candidate_methods = [args.reuse_ga_method]
+        else:
+            candidate_methods = [method_label]
+            if method_label == "with_hessian":
+                candidate_methods.append("without_hessian")
+            else:
+                candidate_methods.append("with_hessian")
+
         base_root = ExperimentTracker.compute_data_root(args.data_path)
-        reuse_state_path = base_root / "log" / reuse_method / args.reuse_ga_run / "state.json"
-        if not reuse_state_path.exists():
-            raise FileNotFoundError(f"Reusable GA state not found at {reuse_state_path}")
+        reuse_state_path = None
+        reuse_method = None
+        for candidate in candidate_methods:
+            candidate_path = base_root / "log" / candidate / args.reuse_ga_run / "state.json"
+            if candidate_path.exists():
+                reuse_state_path = candidate_path
+                reuse_method = candidate
+                break
+        if reuse_state_path is None:
+            raise FileNotFoundError(
+                "Reusable GA state not found for any candidate method label. Checked: "
+                + ", ".join(candidate_methods)
+            )
         reuse_state = json.loads(reuse_state_path.read_text(encoding="utf-8"))
         if "ga" not in reuse_state.get("stages", {}):
             raise RuntimeError("Specified reusable GA run does not contain GA stage information.")
