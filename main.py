@@ -458,6 +458,8 @@ def run_pipeline(args: argparse.Namespace) -> None:
                 },
             )
 
+        feature_columns = list(data["X_train_res"].columns)
+
         # ------------------------------------------------------------------
         # Stage: Feature Scoring
         # ------------------------------------------------------------------
