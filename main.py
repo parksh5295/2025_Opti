@@ -345,7 +345,11 @@ def explain_with_shap(
         return
 
     sample = X.sample(n=min(max_samples, len(X)), random_state=0)
-    explainer = shap.LinearExplainer(model, sample, feature_perturbation="correlation")
+    explainer = shap.LinearExplainer(
+        model,
+        sample,
+        feature_perturbation="correlation_dependent",
+    )
     shap_values = explainer.shap_values(sample)
     importances = np.abs(shap_values).mean(axis=0)
     ranked = sorted(zip(feature_names, importances), key=lambda item: item[1], reverse=True)
@@ -754,7 +758,16 @@ def run_pipeline(args: argparse.Namespace) -> None:
         print("[Evaluation] Confusion matrix:\n", evaluation["confusion_matrix"])
 
         if not args.skip_explainability:
-            explain_with_shap(model, data["X_test_scaled"][selected_features], selected_features)
+            try:
+                explain_with_shap(model, data["X_test_scaled"][selected_features], selected_features)
+                tracker.log_event("explainability", "Generated SHAP explanation")
+            except Exception as exc:
+                tracker.log_event(
+                    "explainability",
+                    "Failed to generate SHAP explanation",
+                    {"error": str(exc)},
+                    level=logging.WARNING,
+                )
 
         tracker.mark_status("completed")
         tracker.log_event("pipeline", "Run completed successfully")
