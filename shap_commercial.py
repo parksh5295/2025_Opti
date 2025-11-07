@@ -9,7 +9,9 @@ from typing import Any, Dict
 
 import numpy as np
 import pandas as pd
+from sklearn.linear_model import LogisticRegression
 
+from Module import compute_sample_weights
 from Module.solver_module import configure_sklearn_like_model
 from main import explain_with_shap
 from Module.experiment_tracker import ExperimentTracker
@@ -88,7 +90,20 @@ def main() -> None:
     elif model_meta is not None:
         model = load_artifact(result_dir, model_meta)
     else:
-        raise RuntimeError("No compatible weights or model artifacts found for SHAP explanation.")
+        X_train_meta = preprocessing_artifacts.get("X_train_res")
+        y_train_meta = preprocessing_artifacts.get("y_train_res")
+        if X_train_meta is None or y_train_meta is None:
+            raise RuntimeError("Training data not available to rebuild model for SHAP explanation.")
+        X_train = load_artifact(result_dir, X_train_meta)
+        y_train = load_artifact(result_dir, y_train_meta)
+        cost_beta = solver_details.get("cost_beta", 5.0)
+        logistic = LogisticRegression(max_iter=2000, solver="lbfgs", random_state=0)
+        logistic.fit(
+            X_train[selected_features],
+            np.asarray(y_train),
+            sample_weight=compute_sample_weights(pd.Series(y_train), cost_beta),
+        )
+        model = logistic
 
     explain_with_shap(model, X_subset, selected_features, max_samples=args.max_samples)
 

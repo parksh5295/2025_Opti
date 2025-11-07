@@ -177,9 +177,13 @@ def run() -> None:
             bias,
             threshold=val_threshold,
             val_score=val_score,
-            solver_details={"selected_features": selected_columns, **solver_details},
+            solver_details={
+                "selected_features": selected_columns,
+                "cost_beta": args.cost_beta,
+                **solver_details,
+            },
             model=sklearn_model,
-            )
+        )
             tracker.save_evaluation(evaluation)
             tracker.log_event(
                 "evaluation",
