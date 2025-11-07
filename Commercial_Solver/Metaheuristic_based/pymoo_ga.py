@@ -18,10 +18,11 @@ class LogisticSubsetProblem(ElementwiseProblem):
         super().__init__(n_var=self.X.shape[1], n_obj=1, xl=0, xu=1, type_var=np.bool_, **kwargs)
 
     def _evaluate(self, x, out, *args, **kwargs):
-        if not np.any(x):
+        mask = np.asarray(x).astype(bool)
+        if not np.any(mask):
             out["F"] = 1e6
             return
-        selected = self.X[:, x]
+        selected = self.X[:, mask]
         weights = np.where(self.y == 1, self.cost_beta, 1.0)
         logits = selected.sum(axis=1)
         probs = 1 / (1 + np.exp(-logits))
