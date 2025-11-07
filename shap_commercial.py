@@ -76,17 +76,19 @@ def main() -> None:
     selected_features = solver_details.get("selected_features", list(X_test.columns))
     X_subset = X_test[selected_features]
 
-    backend = solver_metadata.get("backend")
-    if backend == "custom":
-        weights = load_artifact(result_dir, solver_artifacts["weights"])
-        bias_meta = load_artifact(result_dir, solver_artifacts["bias"])
+    weights_meta = solver_artifacts.get("weights")
+    bias_meta_entry = solver_artifacts.get("bias")
+    model_meta = solver_artifacts.get("model")
+
+    if weights_meta and bias_meta_entry:
+        weights = load_artifact(result_dir, weights_meta)
+        bias_meta = load_artifact(result_dir, bias_meta_entry)
         bias = float(bias_meta["bias"])
         model = configure_sklearn_like_model(weights, bias, selected_features)
-    else:
-        model_meta = solver_artifacts.get("model")
-        if model_meta is None:
-            raise RuntimeError("Trained sklearn model is not available in solver artifacts.")
+    elif model_meta is not None:
         model = load_artifact(result_dir, model_meta)
+    else:
+        raise RuntimeError("No compatible weights or model artifacts found for SHAP explanation.")
 
     explain_with_shap(model, X_subset, selected_features, max_samples=args.max_samples)
 

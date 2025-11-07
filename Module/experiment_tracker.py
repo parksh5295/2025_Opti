@@ -370,7 +370,7 @@ class ExperimentTracker:
         stage_dir.mkdir(parents=True, exist_ok=True)
         artifacts: Dict[str, Dict[str, Any]] = {}
 
-        if backend == "custom" and weights is not None and bias is not None:
+        if weights is not None and bias is not None:
             weights_path = stage_dir / "weights.npy"
             np.save(weights_path, weights)
             artifacts["weights"] = {"type": "npy", "path": self._relpath(weights_path)}
@@ -378,7 +378,8 @@ class ExperimentTracker:
             bias_path = stage_dir / "bias.json"
             bias_path.write_text(json.dumps({"bias": bias}), encoding="utf-8")
             artifacts["bias"] = {"type": "json", "path": self._relpath(bias_path)}
-        elif backend == "sklearn" and model is not None:
+
+        if model is not None:
             model_path = stage_dir / "model.joblib"
             dump(model, model_path)
             artifacts["model"] = {"type": "joblib", "path": self._relpath(model_path)}

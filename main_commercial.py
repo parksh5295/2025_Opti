@@ -154,43 +154,43 @@ def run() -> None:
             zero_division=0,
         )
 
-        evaluation_config = EvaluationConfig(
-            beta=args.beta,
-            rho_auc=args.rho_auc,
-            rho_f1=args.rho_f1,
-            rho_pr=args.rho_pr,
-            rho_gmean=args.rho_gmean,
-        )
+            evaluation_config = EvaluationConfig(
+                beta=args.beta,
+                rho_auc=args.rho_auc,
+                rho_f1=args.rho_f1,
+                rho_pr=args.rho_pr,
+                rho_gmean=args.rho_gmean,
+            )
         test_predictions = (model_probs_test >= val_threshold).astype(int)
-        evaluation = evaluate_model(
-            data["y_test"],
+            evaluation = evaluate_model(
+                data["y_test"],
             model_probs_test,
-            test_predictions,
-            evaluation_config,
+                test_predictions,
+                evaluation_config,
             redundancy_penalty=0.0,
             subset_size=len(selected_columns),
         )
 
         tracker.save_solver_results(
             backend,
-            weights if backend == "gurobi" else None,
-            bias if backend == "gurobi" else None,
+            weights,
+            bias,
             threshold=val_threshold,
             val_score=val_score,
             solver_details={"selected_features": selected_columns, **solver_details},
             model=sklearn_model,
-        )
-        tracker.save_evaluation(evaluation)
-        tracker.log_event(
-            "evaluation",
-            "Evaluation completed",
-            {
-                "roc_auc": evaluation["roc_auc"],
-                "pr_auc": evaluation["pr_auc"],
-                "overall_score": evaluation["overall_score"],
+            )
+            tracker.save_evaluation(evaluation)
+            tracker.log_event(
+                "evaluation",
+                "Evaluation completed",
+                {
+                    "roc_auc": evaluation["roc_auc"],
+                    "pr_auc": evaluation["pr_auc"],
+                    "overall_score": evaluation["overall_score"],
                 "selected_features": selected_columns,
-            },
-        )
+                },
+            )
         tracker.mark_status("completed")
 
         print(f"[Evaluation] Test ROC-AUC: {evaluation['roc_auc']:.4f}")
