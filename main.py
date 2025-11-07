@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -406,6 +407,36 @@ def run_pipeline(args: argparse.Namespace) -> None:
         beta_cost=args.cost_beta,
     )
 
+    reuse_ga_data = None
+    if args.reuse_ga_run:
+        reuse_method = args.reuse_ga_method or method_label
+        base_root = ExperimentTracker.compute_data_root(args.data_path)
+        reuse_state_path = base_root / "log" / reuse_method / args.reuse_ga_run / "state.json"
+        if not reuse_state_path.exists():
+            raise FileNotFoundError(f"Reusable GA state not found at {reuse_state_path}")
+        reuse_state = json.loads(reuse_state_path.read_text(encoding="utf-8"))
+        if "ga" not in reuse_state.get("stages", {}):
+            raise RuntimeError("Specified reusable GA run does not contain GA stage information.")
+        reuse_result_dir = Path(reuse_state["result_dir"])
+        ga_stage = reuse_state["stages"]["ga"]
+        ga_artifacts = ga_stage["artifacts"]
+        selected_features_path = reuse_result_dir / ga_artifacts["selected_features"]["path"]
+        selected_features = json.loads(selected_features_path.read_text(encoding="utf-8"))
+        redundancy_penalty = ga_stage["metadata"].get("redundancy_penalty")
+        best_score = ga_stage["metadata"].get("best_score")
+        history = None
+        if "ga_history" in ga_artifacts:
+            history_path = reuse_result_dir / ga_artifacts["ga_history"]["path"]
+            history = json.loads(history_path.read_text(encoding="utf-8"))
+        reuse_ga_data = {
+            "selected_features": selected_features,
+            "redundancy_penalty": redundancy_penalty,
+            "best_score": best_score,
+            "history": history,
+            "source_run": args.reuse_ga_run,
+            "source_method": reuse_method,
+        }
+
     try:
         # ------------------------------------------------------------------
         # Stage: Preprocessing
@@ -581,6 +612,29 @@ def run_pipeline(args: argparse.Namespace) -> None:
             selected_features = ga_data["selected_features"]
             ga_score = ga_data.get("best_score")
             redundancy_penalty = ga_data.get("redundancy_penalty")
+        elif reuse_ga_data is not None:
+            selected_features = [feat for feat in reuse_ga_data["selected_features"] if feat in feature_columns]
+            if not selected_features:
+                raise RuntimeError("Reusable GA features are not present in current dataset.")
+            redundancy_penalty = reuse_ga_data["redundancy_penalty"]
+            if redundancy_penalty is None:
+                redundancy_penalty = compute_subset_penalty(selected_features, penalty_matrix, ensemble_scores)
+            ga_score = reuse_ga_data.get("best_score")
+            tracker.save_ga_results(
+                selected_features,
+                ga_score,
+                history=reuse_ga_data.get("history"),
+                redundancy_penalty=redundancy_penalty,
+            )
+            tracker.log_event(
+                "ga",
+                "Reused GA results",
+                {
+                    "source_run": reuse_ga_data["source_run"],
+                    "source_method": reuse_ga_data["source_method"],
+                    "selected_features": len(selected_features),
+                },
+            )
         else:
             tracker.log_event("ga", "Starting genetic algorithm optimisation")
             fitness_fn = make_cost_sensitive_fitness(
@@ -883,6 +937,18 @@ def parse_arguments() -> argparse.Namespace:
         type=int,
         default=5,
         help="Number of top-ranked features per method to use when constructing ensemble features.",
+    )
+    parser.add_argument(
+        "--reuse-ga-run",
+        type=str,
+        default=None,
+        help="Reuse GA results from the specified run name instead of re-running GA.",
+    )
+    parser.add_argument(
+        "--reuse-ga-method",
+        type=str,
+        default=None,
+        help="Method label (with_hessian / without_hessian) to use when loading GA results. Defaults to current method.",
     )
     parser.add_argument("--target-column", type=str, default="Class", help="Name of the target column in the dataset.")
     parser.add_argument("--test-size", type=float, default=0.2, help="Proportion reserved for the test split.")
