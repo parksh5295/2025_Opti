@@ -222,6 +222,10 @@ class ExperimentTracker:
         mi_scores: Dict[str, float],
         rf_scores: Dict[str, float],
         ensemble_scores: Dict[str, float],
+        *,
+        ensemble_mode: str,
+        constructed_frames: Optional[Dict[str, pd.DataFrame]] = None,
+        constructed_metadata: Optional[Dict[str, object]] = None,
     ) -> None:
         stage = "feature_scoring"
         stage_dir = self.result_dir / stage
@@ -239,16 +243,47 @@ class ExperimentTracker:
             df.to_csv(path, index=False)
             artifacts[name] = {"type": "csv", "path": self._relpath(path)}
 
-        self._record_stage(stage, artifacts, {})
+        if constructed_frames:
+            for key, frame in constructed_frames.items():
+                path = stage_dir / f"{key}_constructed.pkl"
+                frame.to_pickle(path)
+                artifacts[f"{key}_constructed"] = {
+                    "type": "pandas_pickle",
+                    "path": self._relpath(path),
+                }
 
-    def load_feature_scores(self) -> Dict[str, Dict[str, float]]:
-        info = self.state["stages"]["feature_scoring"]["artifacts"]
-        output: Dict[str, Dict[str, float]] = {}
+        metadata = {"ensemble_mode": ensemble_mode}
+        if constructed_metadata:
+            metadata.update({
+                "constructed_columns": constructed_metadata.get("created_columns", []),
+                "constructed_top_features": constructed_metadata.get("top_features", {}),
+                "constructed_top_k": constructed_metadata.get("top_k"),
+                "constructed_new_scores": constructed_metadata.get("new_scores", {}),
+            })
+
+        self._record_stage(stage, artifacts, metadata)
+
+    def load_feature_scores(self) -> Dict[str, object]:
+        stage_info = self.state["stages"]["feature_scoring"]
+        info = stage_info["artifacts"]
+        output_scores: Dict[str, Dict[str, float]] = {}
+        constructed_frames: Dict[str, pd.DataFrame] = {}
+
         for name, meta in info.items():
             path = self.result_dir / meta["path"]
-            df = pd.read_csv(path)
-            output[name.replace("_scores", "")] = dict(zip(df["feature"], df["score"]))
-        return output
+            if name.endswith("_constructed"):
+                df = pd.read_pickle(path)
+                key = name.replace("_constructed", "")
+                constructed_frames[key] = df
+            else:
+                df = pd.read_csv(path)
+                output_scores[name.replace("_scores", "")] = dict(zip(df["feature"], df["score"]))
+
+        return {
+            "scores": output_scores,
+            "constructed_frames": constructed_frames,
+            "metadata": stage_info.get("metadata", {}),
+        }
 
     def save_redundancy(
         self,

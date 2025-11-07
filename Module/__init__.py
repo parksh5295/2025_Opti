@@ -10,6 +10,7 @@ from .solver_module import (
     solve_cost_sensitive_logistic,
     solver_predict_proba,
 )
+from Ensemble.feature_constructor import construct_ensemble_features
 
 __all__ = [
     "GAConfig",
@@ -21,6 +22,7 @@ __all__ = [
     "evaluate_model",
     "format_cost_sensitive_summary",
     "ExperimentTracker",
+    "construct_ensemble_features",
     "SolverConfig",
     "solve_cost_sensitive_logistic",
     "solver_predict_proba",

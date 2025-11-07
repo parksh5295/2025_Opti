@@ -26,6 +26,7 @@ from Module import (
     GeneticFeatureSelector,
     PreprocessingConfig,
     SolverConfig,
+    construct_ensemble_features,
     compute_sample_weights,
     configure_sklearn_like_model,
     evaluate_model,
@@ -434,13 +435,39 @@ def run_pipeline(args: argparse.Namespace) -> None:
             "mutual_info": args.weight_mi,
             "random_forest": args.weight_rf,
         }
+        constructed_frames: Optional[Dict[str, pd.DataFrame]] = None
+        constructed_metadata: Optional[Dict[str, object]] = None
         if tracker.is_completed("feature_scoring"):
             tracker.log_event("feature_scoring", "Loading cached feature scores")
-            scores = tracker.load_feature_scores()
-            pca_scores = scores["pca"]
-            mi_scores = scores["mi"]
-            rf_scores = scores["rf"]
-            ensemble_scores = scores["ensemble"]
+            scores_payload = tracker.load_feature_scores()
+            score_map = scores_payload["scores"]
+            pca_scores = score_map.get("pca", {})
+            mi_scores = score_map.get("mi", {})
+            rf_scores = score_map.get("rf", {})
+            ensemble_scores = score_map.get("ensemble", {})
+
+            constructed_frames = scores_payload.get("constructed_frames") or {}
+            metadata_fs = scores_payload.get("metadata", {})
+            stored_mode = metadata_fs.get("ensemble_mode")
+            if stored_mode and stored_mode != args.feature_ensemble_mode:
+                tracker.log_event(
+                    "feature_scoring",
+                    "Stored ensemble mode differs from requested mode; continuing with stored configuration.",
+                    {"stored_mode": stored_mode, "requested_mode": args.feature_ensemble_mode},
+                    level=logging.WARNING,
+                )
+            if constructed_frames:
+                for key, frame in constructed_frames.items():
+                    data[key] = pd.concat([data[key], frame], axis=1)
+            constructed_metadata = {
+                "created_columns": metadata_fs.get("constructed_columns", []),
+                "top_features": metadata_fs.get("constructed_top_features", {}),
+                "top_k": metadata_fs.get("constructed_top_k"),
+                "new_scores": metadata_fs.get("constructed_new_scores", {}),
+            }
+            new_scores = constructed_metadata.get("new_scores") or {}
+            if new_scores:
+                ensemble_scores.update({k: float(v) for k, v in new_scores.items()})
         else:
             tracker.log_event("feature_scoring", "Computing feature importance scores")
             pca_scores = compute_pca_scores(data["X_train_res"], random_state=random_state)
@@ -459,7 +486,47 @@ def run_pipeline(args: argparse.Namespace) -> None:
                 {"pca": pca_scores, "mutual_info": mi_scores, "random_forest": rf_scores},
                 ensemble_weights,
             )
-            tracker.save_feature_scores(pca_scores, mi_scores, rf_scores, ensemble_scores)
+            if args.feature_ensemble_mode == "construct":
+                constructed_frames, constructed_metadata = construct_ensemble_features(
+                    {
+                        key: data[key]
+                        for key in [
+                            "X_train_res",
+                            "X_train_scaled",
+                            "X_val_scaled",
+                            "X_test_scaled",
+                        ]
+                    },
+                    pca_scores,
+                    mi_scores,
+                    rf_scores,
+                    ensemble_scores,
+                    top_k=args.feature_ensemble_top_k,
+                )
+                if constructed_frames:
+                    for key, frame in constructed_frames.items():
+                        data[key] = pd.concat([data[key], frame], axis=1)
+                if constructed_metadata:
+                    new_scores = constructed_metadata.get("new_scores", {})
+                    if new_scores:
+                        ensemble_scores.update({k: float(v) for k, v in new_scores.items()})
+                    tracker.log_event(
+                        "feature_scoring",
+                        "Constructed ensemble features",
+                        {
+                            "created_columns": len(constructed_metadata.get("created_columns", [])),
+                            "top_k": constructed_metadata.get("top_k"),
+                        },
+                    )
+            tracker.save_feature_scores(
+                pca_scores,
+                mi_scores,
+                rf_scores,
+                ensemble_scores,
+                ensemble_mode=args.feature_ensemble_mode,
+                constructed_frames=constructed_frames or None,
+                constructed_metadata=constructed_metadata,
+            )
             tracker.log_event(
                 "feature_scoring",
                 "Feature scoring completed",
@@ -803,6 +870,19 @@ def parse_arguments() -> argparse.Namespace:
         "--force-new-run",
         action="store_true",
         help="Ignore existing states and always start a new run.",
+    )
+    parser.add_argument(
+        "--feature-ensemble-mode",
+        type=str,
+        default="scores",
+        choices=["scores", "construct"],
+        help="How to aggregate feature selection methods: 'scores' uses weighted importance scores only, 'construct' also creates new aggregate features.",
+    )
+    parser.add_argument(
+        "--feature-ensemble-top-k",
+        type=int,
+        default=5,
+        help="Number of top-ranked features per method to use when constructing ensemble features.",
     )
     parser.add_argument("--target-column", type=str, default="Class", help="Name of the target column in the dataset.")
     parser.add_argument("--test-size", type=float, default=0.2, help="Proportion reserved for the test split.")
