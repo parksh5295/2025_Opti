@@ -439,6 +439,8 @@ class ExperimentTracker:
             return obj.to_dict()
         if isinstance(obj, np.ndarray):
             return obj.tolist()
+        if isinstance(obj, (np.integer, np.floating, np.bool_)):
+            return obj.item()
         raise TypeError(f"Object of type {type(obj)!r} is not JSON serializable")
 
 
