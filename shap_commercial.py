@@ -12,6 +12,7 @@ import pandas as pd
 
 from Module.solver_module import configure_sklearn_like_model
 from main import explain_with_shap
+from Module.experiment_tracker import ExperimentTracker
 
 
 def load_state(state_path: Path) -> Dict[str, Any]:
@@ -46,11 +47,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    data_root = Path(args.data_path).resolve()
-    parents = list(data_root.parents)
-    if len(parents) < 2:
-        raise RuntimeError("Unable to determine project data root from data path.")
-    base_root = parents[1]
+    base_root = ExperimentTracker.compute_data_root(Path(args.data_path))
 
     state_path = base_root / "log" / args.method_label / args.run_name / "state.json"
     if not state_path.exists():
@@ -59,7 +56,9 @@ def main() -> None:
     state = load_state(state_path)
     stages = state.get("stages", {})
     if "solver" not in stages or "evaluation" not in stages:
-        raise RuntimeError("Solver or evaluation stage not found in the specified run.")
+        raise RuntimeError(
+            "Solver or evaluation stage not found. Re-run `main_commercial.py` for the same run to produce the necessary artifacts."
+        )
 
     result_dir = Path(state["result_dir"])
 
