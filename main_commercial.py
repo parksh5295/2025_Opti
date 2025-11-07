@@ -104,8 +104,12 @@ def run() -> None:
             selected_columns = [col for col, w in zip(feature_columns, weights) if abs(w) > 1e-9]
             if not selected_columns:
                 selected_columns = feature_columns
-            model_probs_val = _sigmoid(X_val_df[selected_columns].to_numpy() @ weights[: len(selected_columns)] + bias)
-            model_probs_test = _sigmoid(X_test_df[selected_columns].to_numpy() @ weights[: len(selected_columns)] + bias)
+            model_probs_val = _sigmoid(
+                X_val_df[selected_columns].to_numpy() @ weights[: len(selected_columns)] + bias
+            )
+            model_probs_test = _sigmoid(
+                X_test_df[selected_columns].to_numpy() @ weights[: len(selected_columns)] + bias
+            )
             backend = "gurobi"
             solver_details = {"status": result.get("status"), "objective": result.get("objective")}
             sklearn_model = None
@@ -124,7 +128,7 @@ def run() -> None:
             logistic = LogisticRegression(max_iter=2000, solver="lbfgs", random_state=args.random_state)
             logistic.fit(
                 X_train_df[selected_columns],
-        y_train,
+                y_train,
                 sample_weight=compute_sample_weights(data["y_train_res"], args.cost_beta),
             )
             model_probs_val = logistic.predict_proba(X_val_df[selected_columns])[:, 1]
@@ -150,19 +154,19 @@ def run() -> None:
             zero_division=0,
         )
 
-            evaluation_config = EvaluationConfig(
-                beta=args.beta,
-                rho_auc=args.rho_auc,
-                rho_f1=args.rho_f1,
-                rho_pr=args.rho_pr,
-                rho_gmean=args.rho_gmean,
-            )
+        evaluation_config = EvaluationConfig(
+            beta=args.beta,
+            rho_auc=args.rho_auc,
+            rho_f1=args.rho_f1,
+            rho_pr=args.rho_pr,
+            rho_gmean=args.rho_gmean,
+        )
         test_predictions = (model_probs_test >= val_threshold).astype(int)
-            evaluation = evaluate_model(
-                data["y_test"],
+        evaluation = evaluate_model(
+            data["y_test"],
             model_probs_test,
-                test_predictions,
-                evaluation_config,
+            test_predictions,
+            evaluation_config,
             redundancy_penalty=0.0,
             subset_size=len(selected_columns),
         )
@@ -175,18 +179,18 @@ def run() -> None:
             val_score=val_score,
             solver_details={"selected_features": selected_columns, **solver_details},
             model=sklearn_model,
-            )
-            tracker.save_evaluation(evaluation)
-            tracker.log_event(
-                "evaluation",
-                "Evaluation completed",
-                {
-                    "roc_auc": evaluation["roc_auc"],
-                    "pr_auc": evaluation["pr_auc"],
-                    "overall_score": evaluation["overall_score"],
+        )
+        tracker.save_evaluation(evaluation)
+        tracker.log_event(
+            "evaluation",
+            "Evaluation completed",
+            {
+                "roc_auc": evaluation["roc_auc"],
+                "pr_auc": evaluation["pr_auc"],
+                "overall_score": evaluation["overall_score"],
                 "selected_features": selected_columns,
-                },
-            )
+            },
+        )
         tracker.mark_status("completed")
 
         print(f"[Evaluation] Test ROC-AUC: {evaluation['roc_auc']:.4f}")
