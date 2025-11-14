@@ -10,7 +10,7 @@ from .solver_module import (
     solve_cost_sensitive_logistic,
     solver_predict_proba,
 )
-from .visualization import generate_tsne_snapshots
+from .visualization import generate_single_model_tsne, generate_tsne_snapshots
 from Ensemble.feature_constructor import construct_ensemble_features
 
 __all__ = [
@@ -29,5 +29,6 @@ __all__ = [
     "solver_predict_proba",
     "configure_sklearn_like_model",
     "generate_tsne_snapshots",
+    "generate_single_model_tsne",
 ]
 

@@ -19,6 +19,7 @@ from Module import (
     compute_sample_weights,
     evaluate_model,
     format_cost_sensitive_summary,
+    generate_single_model_tsne,
     load_and_preprocess,
 )
 from Commercial_Solver.Numerical_optimization.gurobi_solver import solve_with_gurobi
@@ -42,6 +43,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rho-f1", type=float, default=0.25)
     parser.add_argument("--rho-pr", type=float, default=0.2)
     parser.add_argument("--rho-gmean", type=float, default=0.1)
+    parser.add_argument(
+        "--tsne-snapshots",
+        action="store_true",
+        help="Generate t-SNE visualization of final model predictions.",
+    )
     return parser.parse_args()
 
 
@@ -205,6 +211,37 @@ def run() -> None:
         print(f"[Evaluation] Overall score: {evaluation['overall_score']:.4f}")
         print("[Evaluation] Classification report:\n" + evaluation["classification_report"])
         print("[Evaluation] Confusion matrix:\n", evaluation["confusion_matrix"])
+        
+        # Generate t-SNE visualization if requested
+        if args.tsne_snapshots:
+            try:
+                tsne_output = generate_single_model_tsne(
+                    data["X_train_res"][selected_columns],
+                    data["y_train_res"],
+                    weights[:len(selected_columns)] if len(weights) > len(selected_columns) else weights,
+                    bias,
+                    tracker.result_dir,
+                    threshold=val_threshold,
+                    use_adaptive_threshold=True,
+                    title_suffix=f" ({backend})",
+                )
+                if tsne_output:
+                    tracker.log_event(
+                        "visualisation",
+                        "Generated t-SNE visualization",
+                        {"file": str(tsne_output.relative_to(tracker.result_dir))},
+                    )
+                    print(f"[t-SNE] Visualization saved to: {tsne_output}")
+            except Exception as exc:
+                import logging
+                tracker.log_event(
+                    "visualisation",
+                    "Failed to generate t-SNE visualization",
+                    {"error": str(exc)},
+                    level=logging.WARNING,
+                )
+                print(f"[t-SNE] Warning: Failed to generate visualization: {exc}")
+        
         print(f"[Tracker] Results saved to {tracker.result_dir}")
         print(f"[Tracker] Logs saved to {tracker.log_dir}")
     except Exception as exc:
