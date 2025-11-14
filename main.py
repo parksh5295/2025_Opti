@@ -1111,8 +1111,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--tsne-gif-duration",
         type=float,
-        default=0.6,
-        help="Frame duration, in seconds, for the animated t-SNE GIF.",
+        default=2.0,
+        help="Frame duration, in seconds, for the animated t-SNE GIF (default: 2.0).",
     )
     parser.add_argument("--skip-explainability", action="store_true", help="Skip SHAP-based explainability step.")
     parser.add_argument("--random-state", type=int, default=42, help="Random seed used across the pipeline.")
