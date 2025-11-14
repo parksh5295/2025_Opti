@@ -7,7 +7,7 @@ custom solver but relies on Gurobi's quadratic programming capabilities.
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 from gurobipy import GRB, Model
@@ -20,6 +20,8 @@ def solve_with_gurobi(
     *,
     max_iter: int = 200,
     name: str = "gurobi_logistic",
+    track_snapshots: bool = False,
+    snapshot_interval: int = 5,
 ) -> Dict[str, object]:
     n_samples, n_features = X.shape
     model = Model(name)
@@ -43,17 +45,63 @@ def solve_with_gurobi(
             loss_terms.append(weight * slack_pos)
 
     model.setObjective(sum(loss_terms) / np.sum(sample_weight), GRB.MINIMIZE)
-    model.optimize()
+    
+    snapshots: List[Dict[str, object]] = []
+    last_snapshot_iter = -1
+    
+    def callback(model_obj, where):
+        """Callback to track iterations."""
+        nonlocal last_snapshot_iter
+        
+        if track_snapshots and where == GRB.Callback.BARRIER:
+            # Get current iteration count
+            try:
+                itcnt = model_obj.cbGet(GRB.Callback.BARRIER_ITRCNT)
+                
+                # Save snapshot at specified intervals
+                if itcnt == 0 or itcnt % snapshot_interval == 0 or itcnt == max_iter:
+                    if itcnt != last_snapshot_iter:
+                        # Try to get current solution
+                        try:
+                            current_w = np.array([model_obj.cbGetSolution(w[j]) for j in range(n_features)])
+                            current_b = model_obj.cbGetSolution(b)
+                            
+                            snapshots.append({
+                                "iteration": int(itcnt),
+                                "weights": current_w.tolist(),
+                                "bias": float(current_b),
+                            })
+                            last_snapshot_iter = itcnt
+                        except Exception:
+                            # Solution might not be available at this point
+                            pass
+            except Exception:
+                # BARRIER callback might not be available for all solvers
+                pass
+    
+    model.optimize(callback if track_snapshots else None)
 
     weights = np.array([float(w[j].X) for j in range(n_features)])
     bias = float(b.X)
 
-    return {
+    return_dict = {
         "weights": weights,
         "bias": bias,
         "status": model.Status,
         "objective": model.objVal if model.SolCount else None,
     }
+    
+    if track_snapshots and snapshots:
+        # Add final snapshot if not already included
+        if not snapshots or snapshots[-1]["iteration"] != max_iter:
+            snapshots.append({
+                "iteration": max_iter,
+                "weights": weights.tolist(),
+                "bias": bias,
+            })
+        return_dict["snapshots"] = snapshots
+    
+    return return_dict
 
 
 __all__ = ["solve_with_gurobi"]

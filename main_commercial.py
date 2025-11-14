@@ -20,6 +20,7 @@ from Module import (
     evaluate_model,
     format_cost_sensitive_summary,
     generate_single_model_tsne,
+    generate_tsne_snapshots,
     load_and_preprocess,
 )
 from Commercial_Solver.Numerical_optimization.gurobi_solver import solve_with_gurobi
@@ -46,7 +47,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--tsne-snapshots",
         action="store_true",
-        help="Generate t-SNE visualization of final model predictions.",
+        help="Generate t-SNE visualizations of solver predictions at snapshot intervals (pymoo_ga and gurobi only).",
+    )
+    parser.add_argument(
+        "--tsne-interval",
+        type=int,
+        default=5,
+        help="Iteration/generation interval used when capturing solver snapshots (default: 5).",
+    )
+    parser.add_argument(
+        "--tsne-gif",
+        action="store_true",
+        help="Combine generated t-SNE snapshots into an animated GIF.",
+    )
+    parser.add_argument(
+        "--tsne-gif-duration",
+        type=float,
+        default=2.0,
+        help="Frame duration, in seconds, for the animated t-SNE GIF (default: 2.0).",
     )
     return parser.parse_args()
 
@@ -99,14 +117,19 @@ def run() -> None:
 
         feature_columns = list(X_train_df.columns)
 
+        snapshots: Optional[List[Dict[str, object]]] = None
+        
         if args.solver == "gurobi":
             result = solve_with_gurobi(
                 X_train_df.to_numpy(),
                 y_train,
                 compute_sample_weights(data["y_train_res"], args.cost_beta),
+                track_snapshots=args.tsne_snapshots,
+                snapshot_interval=args.tsne_interval,
             )
             weights = result["weights"]
             bias = result["bias"]
+            snapshots = result.get("snapshots")
             selected_columns = [col for col, w in zip(feature_columns, weights) if abs(w) > 1e-9]
             if not selected_columns:
                 selected_columns = feature_columns
@@ -124,7 +147,10 @@ def run() -> None:
                 X_train_df.to_numpy(),
                 y_train,
                 cost_beta=args.cost_beta,
+                track_snapshots=args.tsne_snapshots,
+                snapshot_interval=args.tsne_interval,
             )
+            snapshots = ga_result.get("snapshots")
             mask = np.asarray(ga_result.get("mask", []), dtype=bool)
             if mask.size != len(feature_columns):
                 mask = np.ones(len(feature_columns), dtype=bool)
@@ -134,7 +160,7 @@ def run() -> None:
             logistic = LogisticRegression(max_iter=2000, solver="lbfgs", random_state=args.random_state)
             logistic.fit(
                 X_train_df[selected_columns],
-        y_train,
+                y_train,
                 sample_weight=compute_sample_weights(data["y_train_res"], args.cost_beta),
             )
             model_probs_val = logistic.predict_proba(X_val_df[selected_columns])[:, 1]
@@ -144,18 +170,19 @@ def run() -> None:
             backend = "pymoo_ga"
             solver_details = {"loss": ga_result.get("loss")}
             sklearn_model = logistic
-    tracker.log_event(
-                "commercial_solver",
-                "Selected features from GA",
-                {"count": len(selected_columns), "features": selected_columns},
-            )
+
+        tracker.log_event(
+            "commercial_solver",
+            "Selected features",
+            {"count": len(selected_columns), "features": selected_columns},
+        )
 
         val_threshold = 0.5
         val_preds = (model_probs_val >= val_threshold).astype(int)
         val_score = fbeta_score(
             y_val,
             val_preds,
-                    beta=args.beta,
+            beta=args.beta,
             sample_weight=compute_sample_weights(data["y_val"], args.cost_beta),
             zero_division=0,
         )
@@ -189,18 +216,19 @@ def run() -> None:
                 **solver_details,
             },
             model=sklearn_model,
-            )
-            tracker.save_evaluation(evaluation)
-            tracker.log_event(
-                "evaluation",
-                "Evaluation completed",
-                {
-                    "roc_auc": evaluation["roc_auc"],
-                    "pr_auc": evaluation["pr_auc"],
-                    "overall_score": evaluation["overall_score"],
+            snapshots=snapshots if (args.tsne_snapshots and snapshots) else None,
+        )
+        tracker.save_evaluation(evaluation)
+        tracker.log_event(
+            "evaluation",
+            "Evaluation completed",
+            {
+                "roc_auc": evaluation["roc_auc"],
+                "pr_auc": evaluation["pr_auc"],
+                "overall_score": evaluation["overall_score"],
                 "selected_features": selected_columns,
-                },
-            )
+            },
+        )
         tracker.mark_status("completed")
 
         print(f"[Evaluation] Test ROC-AUC: {evaluation['roc_auc']:.4f}")
@@ -211,27 +239,95 @@ def run() -> None:
         print(f"[Evaluation] Overall score: {evaluation['overall_score']:.4f}")
         print("[Evaluation] Classification report:\n" + evaluation["classification_report"])
         print("[Evaluation] Confusion matrix:\n", evaluation["confusion_matrix"])
-        
+
         # Generate t-SNE visualization if requested
         if args.tsne_snapshots:
             try:
-                tsne_output = generate_single_model_tsne(
-                    data["X_train_res"][selected_columns],
-                    data["y_train_res"],
-                    weights[:len(selected_columns)] if len(weights) > len(selected_columns) else weights,
-                    bias,
-                    tracker.result_dir,
-                    threshold=val_threshold,
-                    use_adaptive_threshold=True,
-                    title_suffix=f" ({backend})",
-                )
-                if tsne_output:
-                    tracker.log_event(
-                        "visualisation",
-                        "Generated t-SNE visualization",
-                        {"file": str(tsne_output.relative_to(tracker.result_dir))},
+                if snapshots and len(snapshots) > 1:
+                    # Multiple snapshots available - generate GIF
+                    # For pymoo_ga, snapshots might have weights for all features
+                    # We need to extract only selected_columns
+                    processed_snapshots = []
+                    for snap in snapshots:
+                        snap_weights = np.asarray(snap["weights"], dtype=float)
+                        if len(snap_weights) == len(selected_columns):
+                            # Already filtered
+                            processed_snapshots.append({
+                                "iteration": snap["iteration"],
+                                "weights": snap_weights,
+                                "bias": snap["bias"],
+                            })
+                        elif len(snap_weights) == len(feature_columns):
+                            # Need to filter to selected_columns
+                            selected_weights = snap_weights[[feature_columns.index(c) for c in selected_columns]]
+                            processed_snapshots.append({
+                                "iteration": snap["iteration"],
+                                "weights": selected_weights,
+                                "bias": snap["bias"],
+                            })
+                        else:
+                            # Skip invalid snapshots
+                            continue
+                    
+                    if processed_snapshots:
+                        tsne_outputs = generate_tsne_snapshots(
+                            data["X_train_res"][selected_columns],
+                            data["y_train_res"],
+                            processed_snapshots,
+                            tracker.result_dir,
+                            threshold=val_threshold,
+                            use_adaptive_threshold=True,
+                            gif=args.tsne_gif,
+                            gif_duration=args.tsne_gif_duration,
+                        )
+                        if tsne_outputs:
+                            import logging
+                            relative_files = []
+                            for path in tsne_outputs:
+                                try:
+                                    relative_files.append(str(path.relative_to(tracker.result_dir)))
+                                except ValueError:
+                                    relative_files.append(str(path))
+                            tracker.log_event(
+                                "visualisation",
+                                "Generated t-SNE snapshots with GIF",
+                                {"files": relative_files, "count": len(tsne_outputs)},
+                            )
+                            print(f"[t-SNE] Generated {len(processed_snapshots)} snapshots")
+                            if args.tsne_gif:
+                                gif_path = [p for p in tsne_outputs if p.suffix == ".gif"]
+                                if gif_path:
+                                    print(f"[t-SNE] GIF saved to: {gif_path[0]}")
+                    else:
+                        print("[t-SNE] Warning: No valid snapshots to visualize")
+                else:
+                    # Single final model visualization
+                    if len(weights) > len(selected_columns):
+                        weights_used = weights[:len(selected_columns)]
+                    elif len(weights) < len(selected_columns):
+                        weights_used = np.pad(weights, (0, len(selected_columns) - len(weights)), 'constant')
+                    else:
+                        weights_used = weights
+                    
+                    tsne_output = generate_single_model_tsne(
+                        data["X_train_res"][selected_columns],
+                        data["y_train_res"],
+                        weights_used,
+                        bias,
+                        tracker.result_dir,
+                        threshold=val_threshold,
+                        use_adaptive_threshold=True,
+                        title_suffix=f" ({backend})",
                     )
-                    print(f"[t-SNE] Visualization saved to: {tsne_output}")
+                    if tsne_output:
+                        tracker.log_event(
+                            "visualisation",
+                            "Generated t-SNE visualization (single final model)",
+                            {"file": str(tsne_output.relative_to(tracker.result_dir))},
+                        )
+                        print(f"[t-SNE] Final model visualization saved to: {tsne_output}")
+                        if not snapshots:
+                            print("[t-SNE] Note: No iteration snapshots available for this solver.")
             except Exception as exc:
                 import logging
                 tracker.log_event(
@@ -241,7 +337,7 @@ def run() -> None:
                     level=logging.WARNING,
                 )
                 print(f"[t-SNE] Warning: Failed to generate visualization: {exc}")
-        
+
         print(f"[Tracker] Results saved to {tracker.result_dir}")
         print(f"[Tracker] Logs saved to {tracker.log_dir}")
     except Exception as exc:

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Dict, Sequence
+from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.core.problem import ElementwiseProblem
 from pymoo.optimize import minimize
+from pymoo.util.callback import Callback
 
 
 class LogisticSubsetProblem(ElementwiseProblem):
@@ -32,21 +33,101 @@ class LogisticSubsetProblem(ElementwiseProblem):
         out["F"] = loss
 
 
+class GenerationCallback(Callback):
+    """Callback to track generations and save snapshots for t-SNE visualization."""
+    
+    def __init__(self, X: np.ndarray, y: np.ndarray, cost_beta: float, snapshot_interval: int = 5):
+        super().__init__()
+        self.X = X
+        self.y = y
+        self.cost_beta = cost_beta
+        self.snapshot_interval = snapshot_interval
+        self.snapshots: List[Dict[str, object]] = []
+        self._last_gen = -1
+    
+    def notify(self, algorithm):
+        """Called at each generation."""
+        gen = algorithm.n_gen
+        
+        # Save snapshot at specified intervals
+        if gen == 0 or gen % self.snapshot_interval == 0 or gen == algorithm.termination.n_max_gen:
+            # Get best individual
+            pop = algorithm.pop
+            F = pop.get("F")
+            X_pop = pop.get("X")
+            
+            if F is not None and len(F) > 0:
+                # Find best (minimum loss)
+                best_idx = np.argmin(F)
+                best_mask = X_pop[best_idx].astype(bool)
+                
+                # Train logistic regression on selected features
+                if np.any(best_mask):
+                    from sklearn.linear_model import LogisticRegression
+                    selected_X = self.X[:, best_mask]
+                    sample_weights = np.where(self.y == 1, self.cost_beta, 1.0)
+                    
+                    model = LogisticRegression(max_iter=1000, solver="lbfgs", random_state=42)
+                    model.fit(selected_X, self.y, sample_weight=sample_weights)
+                    
+                    weights = np.zeros(self.X.shape[1])
+                    weights[best_mask] = model.coef_.ravel()
+                    bias = float(model.intercept_[0])
+                    
+                    self.snapshots.append({
+                        "generation": gen,
+                        "weights": weights.tolist(),
+                        "bias": bias,
+                        "selected_features": best_mask.tolist(),
+                        "loss": float(F[best_idx]),
+                    })
+        
+        self._last_gen = gen
+
+
 def run_pymoo_ga(
     X: np.ndarray,
     y: np.ndarray,
     cost_beta: float,
     population_size: int = 50,
     generations: int = 50,
+    track_snapshots: bool = False,
+    snapshot_interval: int = 5,
 ) -> Dict[str, object]:
     problem = LogisticSubsetProblem(X, y, cost_beta)
     algorithm = NSGA2(pop_size=population_size)
-    result = minimize(problem, algorithm, termination=("n_gen", generations), verbose=False)
+    
+    callback = None
+    if track_snapshots:
+        callback = GenerationCallback(X, y, cost_beta, snapshot_interval)
+    
+    result = minimize(
+        problem,
+        algorithm,
+        termination=("n_gen", generations),
+        verbose=False,
+        callback=callback,
+    )
+    
     best_mask = result.X.astype(bool)
-    return {
+    
+    return_dict = {
         "mask": best_mask,
         "loss": float(result.F[0]) if result.F is not None else None,
     }
+    
+    if track_snapshots and callback:
+        # Convert snapshots to iteration format for compatibility
+        snapshots = []
+        for snap in callback.snapshots:
+            snapshots.append({
+                "iteration": snap["generation"],
+                "weights": snap["weights"],
+                "bias": snap["bias"],
+            })
+        return_dict["snapshots"] = snapshots
+    
+    return return_dict
 
 
 __all__ = ["run_pymoo_ga"]
