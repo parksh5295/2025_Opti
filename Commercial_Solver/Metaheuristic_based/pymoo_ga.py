@@ -8,7 +8,6 @@ import numpy as np
 from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.core.problem import ElementwiseProblem
 from pymoo.optimize import minimize
-from pymoo.util.callback import Callback
 
 
 class LogisticSubsetProblem(ElementwiseProblem):
@@ -33,11 +32,10 @@ class LogisticSubsetProblem(ElementwiseProblem):
         out["F"] = loss
 
 
-class GenerationCallback(Callback):
+class GenerationCallback:
     """Callback to track generations and save snapshots for t-SNE visualization."""
     
     def __init__(self, X: np.ndarray, y: np.ndarray, cost_beta: float, snapshot_interval: int = 5):
-        super().__init__()
         self.X = X
         self.y = y
         self.cost_beta = cost_beta
@@ -45,12 +43,20 @@ class GenerationCallback(Callback):
         self.snapshots: List[Dict[str, object]] = []
         self._last_gen = -1
     
-    def notify(self, algorithm):
-        """Called at each generation."""
+    def __call__(self, algorithm):
+        """Called at each generation (pymoo callback interface)."""
         gen = algorithm.n_gen
         
         # Save snapshot at specified intervals
-        if gen == 0 or gen % self.snapshot_interval == 0 or gen == algorithm.termination.n_max_gen:
+        max_gen = getattr(algorithm.termination, 'n_max_gen', None)
+        if max_gen is None:
+            # Try to get from termination tuple
+            if hasattr(algorithm.termination, 'n_max_gen'):
+                max_gen = algorithm.termination.n_max_gen
+            else:
+                max_gen = gen + 1  # Fallback
+        
+        if gen == 0 or gen % self.snapshot_interval == 0 or (max_gen and gen >= max_gen):
             # Get best individual
             pop = algorithm.pop
             F = pop.get("F")
