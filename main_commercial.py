@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Commercial solver optimisation pipeline")
     parser.add_argument("--data-path", type=Path, required=True, help="CSV dataset path")
     parser.add_argument("--target-column", type=str, default="Class")
-    parser.add_argument("--solver", type=str, default="gurobi", choices=["gurobi", "pymoo_ga"])
+    parser.add_argument("--solver", type=str, default="gurobi", choices=["gurobi", "pymoo_ga", "sklearn"])
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--resume-from", type=Path, default=None)
     parser.add_argument("--force-new-run", action="store_true")
@@ -119,7 +119,63 @@ def run() -> None:
 
         snapshots: Optional[List[Dict[str, object]]] = None
         
-        if args.solver == "gurobi":
+        if args.solver == "sklearn":
+            # sklearn solver - use warm_start to simulate iterations
+            train_weights = compute_sample_weights(data["y_train_res"], args.cost_beta)
+            
+            if args.tsne_snapshots:
+                # Track iterations using warm_start
+                snapshots = []
+                total_iterations = 2000  # Total iterations to simulate
+                iterations_per_step = args.tsne_interval * 10  # Each "step" represents multiple internal iterations
+                n_steps = max(1, total_iterations // iterations_per_step)
+                
+                logistic = LogisticRegression(
+                    max_iter=iterations_per_step,
+                    solver="lbfgs",
+                    warm_start=True,
+                    random_state=args.random_state,
+                )
+                
+                for step in range(n_steps + 1):
+                    logistic.fit(
+                        X_train_df,
+                        y_train,
+                        sample_weight=train_weights,
+                    )
+                    
+                    if step == 0 or step % (args.tsne_interval // 10 + 1) == 0 or step == n_steps:
+                        weights = logistic.coef_.ravel()
+                        bias = float(logistic.intercept_[0])
+                        snapshots.append({
+                            "iteration": step * iterations_per_step,
+                            "weights": weights.tolist(),
+                            "bias": bias,
+                        })
+                
+                # Final model
+                weights = logistic.coef_.ravel()
+                bias = float(logistic.intercept_[0])
+            else:
+                # Standard fit without tracking
+                logistic = LogisticRegression(max_iter=2000, solver="lbfgs", random_state=args.random_state)
+                logistic.fit(
+                    X_train_df,
+                    y_train,
+                    sample_weight=train_weights,
+                )
+                weights = logistic.coef_.ravel()
+                bias = float(logistic.intercept_[0])
+                snapshots = None
+            
+            selected_columns = feature_columns
+            model_probs_val = logistic.predict_proba(X_val_df)[:, 1]
+            model_probs_test = logistic.predict_proba(X_test_df)[:, 1]
+            backend = "sklearn"
+            solver_details = {"solver": "lbfgs", "warm_start_tracking": args.tsne_snapshots}
+            sklearn_model = logistic
+            #snapshots = None  # sklearn doesn't support iteration tracking
+        elif args.solver == "gurobi":
             result = solve_with_gurobi(
                 X_train_df.to_numpy(),
                 y_train,
