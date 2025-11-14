@@ -187,19 +187,19 @@ def run() -> None:
             zero_division=0,
         )
 
-            evaluation_config = EvaluationConfig(
-                beta=args.beta,
-                rho_auc=args.rho_auc,
-                rho_f1=args.rho_f1,
-                rho_pr=args.rho_pr,
-                rho_gmean=args.rho_gmean,
-            )
+        evaluation_config = EvaluationConfig(
+            beta=args.beta,
+            rho_auc=args.rho_auc,
+            rho_f1=args.rho_f1,
+            rho_pr=args.rho_pr,
+            rho_gmean=args.rho_gmean,
+        )
         test_predictions = (model_probs_test >= val_threshold).astype(int)
-            evaluation = evaluate_model(
-                data["y_test"],
+        evaluation = evaluate_model(
+            data["y_test"],
             model_probs_test,
-                test_predictions,
-                evaluation_config,
+            test_predictions,
+            evaluation_config,
             redundancy_penalty=0.0,
             subset_size=len(selected_columns),
         )
