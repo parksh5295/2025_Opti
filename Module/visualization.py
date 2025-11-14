@@ -169,32 +169,36 @@ def generate_tsne_snapshots(
         cbar = plt.colorbar(scatter, ax=ax, label='Fraud Probability', shrink=0.8)
         cbar.set_ticks([0, 0.25, 0.5, 0.75, 1.0])
         
-        # Overlay actual fraud cases with black outline
-        positive_mask = y_np == 1
-        if positive_mask.any():
-            ax.scatter(
-                embedding[positive_mask, 0],
-                embedding[positive_mask, 1],
-                facecolors="none",
-                edgecolors="#000000",
-                s=80,
-                linewidths=1.2,
-                label="Actual Fraud",
-                zorder=10
-            )
-        
-        # Overlay predicted fraud (above threshold) with white edge for visibility
+        # Overlay predicted fraud (above threshold) with bright yellow edge - draw first so it's visible
         pred_fraud_mask = preds == 1
         if pred_fraud_mask.any():
             ax.scatter(
                 embedding[pred_fraud_mask, 0],
                 embedding[pred_fraud_mask, 1],
                 facecolors="none",
-                edgecolors="#ffff00",
-                s=50,
-                linewidths=0.8,
+                edgecolors="#FFD700",  # Gold color, more visible
+                s=70,
+                linewidths=2.0,  # Thicker line
                 label="Predicted Fraud",
-                zorder=9
+                zorder=11,  # Above actual fraud
+                linestyle='-',
+            )
+        
+        # Overlay actual fraud cases with thinner, semi-transparent outline
+        positive_mask = y_np == 1
+        if positive_mask.any():
+            # Use diamond marker for actual fraud to distinguish from predicted
+            ax.scatter(
+                embedding[positive_mask, 0],
+                embedding[positive_mask, 1],
+                facecolors="none",
+                edgecolors="#333333",  # Dark gray instead of pure black
+                s=100,
+                linewidths=0.8,  # Thinner line
+                label="Actual Fraud",
+                zorder=10,  # Below predicted fraud
+                marker='D',  # Diamond marker
+                alpha=0.7,  # Semi-transparent
             )
 
         # Create legend
@@ -202,32 +206,32 @@ def generate_tsne_snapshots(
             Line2D([], [], marker="o", linestyle="", color="#1f77b4", markersize=8, label="Low Prob (Legit)"),
             Line2D([], [], marker="o", linestyle="", color="#d62728", markersize=8, label="High Prob (Fraud)"),
         ]
-        if positive_mask.any():
-            handles.append(
-                Line2D(
-                    [],
-                    [],
-                    marker="o",
-                    linestyle="",
-                    markerfacecolor="none",
-                    markeredgecolor="#000000",
-                    markersize=10,
-                    markeredgewidth=1.2,
-                    label="Actual Fraud",
-                )
-            )
         if pred_fraud_mask.any():
             handles.append(
                 Line2D(
                     [],
                     [],
                     marker="o",
+                    linestyle="-",
+                    markerfacecolor="none",
+                    markeredgecolor="#FFD700",
+                    markersize=10,
+                    markeredgewidth=2.0,
+                    label="Predicted Fraud",
+                )
+            )
+        if positive_mask.any():
+            handles.append(
+                Line2D(
+                    [],
+                    [],
+                    marker="D",  # Diamond marker
                     linestyle="",
                     markerfacecolor="none",
-                    markeredgecolor="#ffff00",
+                    markeredgecolor="#333333",
                     markersize=8,
                     markeredgewidth=0.8,
-                    label="Predicted Fraud",
+                    label="Actual Fraud",
                 )
             )
         
