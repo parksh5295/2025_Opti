@@ -128,7 +128,7 @@ def run() -> None:
             logistic = LogisticRegression(max_iter=2000, solver="lbfgs", random_state=args.random_state)
             logistic.fit(
                 X_train_df[selected_columns],
-                y_train,
+        y_train,
                 sample_weight=compute_sample_weights(data["y_train_res"], args.cost_beta),
             )
             model_probs_val = logistic.predict_proba(X_val_df[selected_columns])[:, 1]
@@ -138,7 +138,7 @@ def run() -> None:
             backend = "pymoo_ga"
             solver_details = {"loss": ga_result.get("loss")}
             sklearn_model = logistic
-            tracker.log_event(
+    tracker.log_event(
                 "commercial_solver",
                 "Selected features from GA",
                 {"count": len(selected_columns), "features": selected_columns},
@@ -149,7 +149,7 @@ def run() -> None:
         val_score = fbeta_score(
             y_val,
             val_preds,
-            beta=args.beta,
+                    beta=args.beta,
             sample_weight=compute_sample_weights(data["y_val"], args.cost_beta),
             zero_division=0,
         )
@@ -183,7 +183,7 @@ def run() -> None:
                 **solver_details,
             },
             model=sklearn_model,
-        )
+            )
             tracker.save_evaluation(evaluation)
             tracker.log_event(
                 "evaluation",

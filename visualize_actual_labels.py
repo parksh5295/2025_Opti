@@ -14,8 +14,7 @@ from matplotlib.lines import Line2D
 
 def generate_actual_labels_tsne(
     data_path: Path,
-    run_name: str,
-    method_label: str = "without_hessian",
+    target_column: str = "Class",
     sample_size: int = 5000,
     output_path: Path | None = None,
 ) -> Path:
@@ -24,65 +23,46 @@ def generate_actual_labels_tsne(
     Parameters
     ----------
     data_path : Path
-        Path to the data directory (parent of Result/ and log/).
-    run_name : str
-        Run name to load preprocessing data from.
-    method_label : str, default="without_hessian"
-        Method label (with_hessian or without_hessian).
+        Path to the credit card fraud dataset CSV file.
+    target_column : str, default="Class"
+        Name of the target column in the dataset.
     sample_size : int, default=5000
         Maximum number of samples to use for t-SNE (for performance).
     output_path : Path, optional
-        Output path for the PNG file. If None, saves to Result/{method_label}/{run_name}/.
+        Output path for the PNG file. If None, saves to Data/tsne_actual_labels.png.
     
     Returns
     -------
     Path
         Path to the generated PNG file.
     """
-    from Module import ExperimentTracker, load_and_preprocess, PreprocessingConfig
+    # Load original dataset directly
+    if not data_path.exists():
+        raise FileNotFoundError(f"Data file not found: {data_path}")
     
-    # Load preprocessing data from the specified run
-    base_root = ExperimentTracker.compute_data_root(data_path)
-    log_root = base_root / "log" / method_label
-    state_path = log_root / run_name / "state.json"
+    print(f"[t-SNE] Loading dataset from: {data_path}")
+    df = pd.read_csv(data_path).drop_duplicates().reset_index(drop=True)
     
-    if not state_path.exists():
-        raise FileNotFoundError(f"State file not found: {state_path}")
+    if target_column not in df.columns:
+        raise ValueError(f"Target column '{target_column}' not found in the dataset.")
     
-    import json
-    with state_path.open("r", encoding="utf-8") as f:
-        state = json.load(f)
+    features = [col for col in df.columns if col != target_column]
+    X = df[features]
+    y = df[target_column]
     
-    if "preprocessing" not in state.get("stages", {}):
-        raise RuntimeError("Preprocessing stage not found in the specified run.")
-    
-    result_dir = Path(state["result_dir"])
-    preproc_stage = state["stages"]["preprocessing"]
-    preproc_artifacts = preproc_stage["artifacts"]
-    
-    # Load training data (resampled)
-    X_train_path = result_dir / preproc_artifacts["X_train_res"]["path"]
-    y_train_path = result_dir / preproc_artifacts["y_train_res"]["path"]
-    
-    if not X_train_path.exists() or not y_train_path.exists():
-        raise FileNotFoundError(f"Preprocessing artifacts not found in {result_dir}")
-    
-    X_train = pd.read_pickle(X_train_path)
-    y_train = pd.read_pickle(y_train_path)
-    
-    print(f"[t-SNE] Loaded {len(X_train)} samples with {len(X_train.columns)} features")
-    print(f"[t-SNE] Fraud cases: {y_train.sum()}, Benign cases: {(y_train == 0).sum()}")
+    print(f"[t-SNE] Loaded {len(X)} samples with {len(X.columns)} features")
+    print(f"[t-SNE] Fraud cases: {y.sum()}, Benign cases: {(y == 0).sum()}")
     
     # Sample if needed
-    if len(X_train) > sample_size:
+    if len(X) > sample_size:
         rng = np.random.default_rng(42)
-        sample_indices = np.sort(rng.choice(len(X_train), size=sample_size, replace=False))
-        X_used = X_train.iloc[sample_indices].reset_index(drop=True)
-        y_used = y_train.iloc[sample_indices].reset_index(drop=True)
+        sample_indices = np.sort(rng.choice(len(X), size=sample_size, replace=False))
+        X_used = X.iloc[sample_indices].reset_index(drop=True)
+        y_used = y.iloc[sample_indices].reset_index(drop=True)
         print(f"[t-SNE] Sampling {sample_size} samples for visualization")
     else:
-        X_used = X_train.reset_index(drop=True)
-        y_used = y_train.reset_index(drop=True)
+        X_used = X.reset_index(drop=True)
+        y_used = y.reset_index(drop=True)
     
     # Compute t-SNE embedding
     print(f"[t-SNE] Computing t-SNE embedding on {len(X_used)} samples...")
@@ -131,15 +111,16 @@ def generate_actual_labels_tsne(
     ]
     ax.legend(handles=handles, loc="upper right", fontsize=10, framealpha=0.9)
     
-    ax.set_title(f"t-SNE Visualization of Actual Labels\n(Run: {run_name}, Method: {method_label})", fontsize=12, fontweight='bold')
+    ax.set_title("t-SNE Visualization of Actual Labels", fontsize=12, fontweight='bold')
     ax.set_xlabel("t-SNE Component 1", fontsize=10)
     ax.set_ylabel("t-SNE Component 2", fontsize=10)
     ax.grid(False)
     fig.tight_layout()
     
-    # Save
+    # Save to Data folder
     if output_path is None:
-        output_path = result_dir / "tsne_actual_labels.png"
+        # Save to the same directory as the data file
+        output_path = data_path.parent / "tsne_actual_labels.png"
     else:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -158,21 +139,14 @@ def main() -> None:
     parser.add_argument(
         "--data-path",
         type=Path,
-        required=True,
-        help="Path to the data directory (parent of Result/ and log/). Can be the CSV file path or data root.",
+        default=Path("../Data/creditcard/creditcard.csv"),
+        help="Path to the credit card fraud dataset CSV file (default: ../Data/creditcard/creditcard.csv).",
     )
     parser.add_argument(
-        "--run-name",
+        "--target-column",
         type=str,
-        required=True,
-        help="Run name to load preprocessing data from.",
-    )
-    parser.add_argument(
-        "--method-label",
-        type=str,
-        default="without_hessian",
-        choices=["without_hessian", "with_hessian"],
-        help="Method label to search for the run.",
+        default="Class",
+        help="Name of the target column in the dataset (default: Class).",
     )
     parser.add_argument(
         "--sample-size",
@@ -184,7 +158,7 @@ def main() -> None:
         "--output",
         type=Path,
         default=None,
-        help="Output path for the PNG file. If not specified, saves to Result/{method_label}/{run_name}/tsne_actual_labels.png",
+        help="Output path for the PNG file. If not specified, saves to Data/tsne_actual_labels.png",
     )
     
     args = parser.parse_args()
@@ -192,8 +166,7 @@ def main() -> None:
     try:
         output_path = generate_actual_labels_tsne(
             data_path=args.data_path,
-            run_name=args.run_name,
-            method_label=args.method_label,
+            target_column=args.target_column,
             sample_size=args.sample_size,
             output_path=args.output,
         )
