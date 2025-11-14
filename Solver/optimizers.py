@@ -46,8 +46,19 @@ def gradient_descent_cost_sensitive(
     """Perform gradient descent on the cost-sensitive NLL objective."""
 
     n_features = X.shape[1]
-    weights = np.zeros(n_features, dtype=float) if weights_init is None else weights_init.astype(float)
-    bias = float(bias_init)
+    if weights_init is None:
+        # Xavier/Glorot initialization for better convergence
+        # Scale by sqrt(1/n_features) for sigmoid activation
+        limit = np.sqrt(1.0 / n_features)
+        rng = np.random.RandomState(42)  # Fixed seed for reproducibility
+        weights = rng.uniform(-limit, limit, size=n_features).astype(float)
+    else:
+        weights = weights_init.astype(float)
+    if bias_init == 0.0:
+        rng = np.random.RandomState(42)
+        bias = float(rng.uniform(-0.01, 0.01))
+    else:
+        bias = float(bias_init)
 
     velocity_w = np.zeros_like(weights)
     velocity_b = 0.0
@@ -160,7 +171,13 @@ def bfgs_cost_sensitive(
     n_samples, n_features = X.shape
     X_aug = np.hstack([X, np.ones((n_samples, 1))])
 
-    theta = np.zeros(n_features + 1, dtype=float) if theta_init is None else theta_init.astype(float)
+    if theta_init is None:
+        # Xavier initialization
+        limit = np.sqrt(1.0 / n_features)
+        rng = np.random.RandomState(42)  # Fixed seed for reproducibility
+        theta = rng.uniform(-limit, limit, size=n_features + 1).astype(float)
+    else:
+        theta = theta_init.astype(float)
     H = np.eye(n_features + 1)
 
     history: Dict[str, List[float]] = {"loss": []} if config.track_history else {}

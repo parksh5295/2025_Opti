@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Sequence
+from typing import Dict, List, Optional, Sequence
 
 import imageio.v2 as imageio
 import matplotlib.pyplot as plt
@@ -11,6 +11,8 @@ import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
 from sklearn.manifold import TSNE
+from scipy.optimize import minimize_scalar
+from sklearn.metrics import fbeta_score
 
 
 def generate_tsne_snapshots(
@@ -18,7 +20,8 @@ def generate_tsne_snapshots(
     y: pd.Series,
     snapshots: Sequence[Dict[str, object]],
     output_root: Path,
-    threshold: float,
+    threshold: Optional[float] = None,
+    use_adaptive_threshold: bool = True,
     gif: bool = False,
     gif_duration: float = 0.6,
 ) -> List[Path]:
@@ -77,34 +80,127 @@ def generate_tsne_snapshots(
 
     y_np = y_used.to_numpy(dtype=int)
 
+    # Calculate loss for each snapshot to show in title
+    from Solver.cost_functions import cost_sensitive_nll
+    
+    # Track statistics across snapshots for debugging
+    prev_weights_norm = None
+    
     for snapshot in snapshots:
         iteration = int(snapshot["iteration"])
         weights = np.asarray(snapshot["weights"], dtype=float)
         bias = float(snapshot["bias"])
 
+        # Debug: Check if weights are changing
+        weights_norm = np.linalg.norm(weights)
+        weights_change = abs(weights_norm - prev_weights_norm) if prev_weights_norm is not None else 0.0
+        prev_weights_norm = weights_norm
+
         logits = X_used.to_numpy(dtype=float) @ weights + bias
-        probs = 1.0 / (1.0 + np.exp(-logits))
-        preds = (probs >= threshold).astype(int)
+        probs = 1.0 / (1.0 + np.exp(-np.clip(logits, -500, 500)))  # Clip to avoid overflow
+        
+        # Use adaptive threshold for each snapshot if requested
+        if use_adaptive_threshold and threshold is None:
+            # Optimize threshold for this specific snapshot's model
+            def objective(t: float) -> float:
+                preds_t = (probs >= t).astype(int)
+                # Use default beta=2.0 for F-beta score
+                score = fbeta_score(y_used, preds_t, beta=2.0, zero_division=0)
+                return -score
+            
+            try:
+                result = minimize_scalar(objective, bounds=(0.01, 0.99), method="bounded", options={"xatol": 1e-3})
+                snapshot_threshold = float(result.x)
+            except Exception:
+                snapshot_threshold = 0.5  # Fallback
+        else:
+            snapshot_threshold = threshold if threshold is not None else 0.5
+        
+        preds = (probs >= snapshot_threshold).astype(int)
+        
+        # Debug info
+        prob_mean = float(np.mean(probs))
+        prob_std = float(np.std(probs))
+        pred_fraud_count = int(np.sum(preds))
+        
+        # Print debug info to console
+        if iteration == 0 or iteration % 10 == 0 or weights_change > 1e-6:
+            print(
+                f"[t-SNE Debug] Iter {iteration:4d} | "
+                f"|W|={weights_norm:.4f} | "
+                f"ΔW={weights_change:.6f} | "
+                f"P_mean={prob_mean:.4f} | "
+                f"P_std={prob_std:.4f} | "
+                f"Pred_fraud={pred_fraud_count:4d}"
+            )
+        
+        # Calculate loss for this snapshot (using training data weights if available)
+        # We'll use a simple sample weight for visualization
+        sample_weights_viz = np.ones(len(y_used))
+        sample_weights_viz[y_used == 1] = 5.0  # Default cost_beta
+        try:
+            loss = cost_sensitive_nll(weights, bias, X_used.to_numpy(dtype=float), y_used.to_numpy(dtype=float), sample_weights_viz)
+        except Exception:
+            loss = float('nan')
 
-        fig, ax = plt.subplots(figsize=(6, 5))
-        colors = np.where(preds == 1, "#d62728", "#1f77b4")
-        ax.scatter(embedding[:, 0], embedding[:, 1], c=colors, s=18, alpha=0.65, edgecolors="none")
-
+        fig, ax = plt.subplots(figsize=(8, 6))
+        
+        # Use probability as color intensity: red for high prob (fraud), blue for low prob (legit)
+        # Create a colormap: blue (0.0) -> white (0.5) -> red (1.0)
+        from matplotlib.colors import LinearSegmentedColormap
+        colors_list = ['#1f77b4', '#ffffff', '#d62728']  # blue -> white -> red
+        n_bins = 256
+        cmap = LinearSegmentedColormap.from_list('prob_map', colors_list, N=n_bins)
+        
+        # Scatter plot with probability-based colors
+        scatter = ax.scatter(
+            embedding[:, 0], 
+            embedding[:, 1], 
+            c=probs, 
+            cmap=cmap, 
+            vmin=0, 
+            vmax=1,
+            s=25, 
+            alpha=0.7, 
+            edgecolors='none'
+        )
+        
+        # Add colorbar
+        cbar = plt.colorbar(scatter, ax=ax, label='Fraud Probability', shrink=0.8)
+        cbar.set_ticks([0, 0.25, 0.5, 0.75, 1.0])
+        
+        # Overlay actual fraud cases with black outline
         positive_mask = y_np == 1
         if positive_mask.any():
             ax.scatter(
                 embedding[positive_mask, 0],
                 embedding[positive_mask, 1],
                 facecolors="none",
-                edgecolors="#111111",
-                s=60,
-                linewidths=0.8,
+                edgecolors="#000000",
+                s=80,
+                linewidths=1.2,
                 label="Actual Fraud",
+                zorder=10
+            )
+        
+        # Overlay predicted fraud (above threshold) with white edge for visibility
+        pred_fraud_mask = preds == 1
+        if pred_fraud_mask.any():
+            ax.scatter(
+                embedding[pred_fraud_mask, 0],
+                embedding[pred_fraud_mask, 1],
+                facecolors="none",
+                edgecolors="#ffff00",
+                s=50,
+                linewidths=0.8,
+                label="Predicted Fraud",
+                zorder=9
             )
 
+        # Create legend
         handles = [
-            Line2D([], [], marker="o", linestyle="", color="#d62728", label="Predicted Fraud"),
-            Line2D([], [], marker="o", linestyle="", color="#1f77b4", label="Predicted Legit"),
+            Line2D([], [], marker="o", linestyle="", color="#1f77b4", markersize=8, label="Low Prob (Legit)"),
+            Line2D([], [], marker="o", linestyle="", color="#d62728", markersize=8, label="High Prob (Fraud)"),
         ]
         if positive_mask.any():
             handles.append(
@@ -114,15 +210,39 @@ def generate_tsne_snapshots(
                     marker="o",
                     linestyle="",
                     markerfacecolor="none",
-                    markeredgecolor="#111111",
+                    markeredgecolor="#000000",
+                    markersize=10,
+                    markeredgewidth=1.2,
                     label="Actual Fraud",
                 )
             )
-
-        ax.legend(handles=handles, loc="upper right", fontsize=8)
-        ax.set_title(f"t-SNE Snapshot (iter {iteration})")
-        ax.set_xlabel("Component 1")
-        ax.set_ylabel("Component 2")
+        if pred_fraud_mask.any():
+            handles.append(
+                Line2D(
+                    [],
+                    [],
+                    marker="o",
+                    linestyle="",
+                    markerfacecolor="none",
+                    markeredgecolor="#ffff00",
+                    markersize=8,
+                    markeredgewidth=0.8,
+                    label="Predicted Fraud",
+                )
+            )
+        
+        ax.legend(handles=handles, loc="upper right", fontsize=7, framealpha=0.9)
+        
+        # Title with iteration, loss, and debug info
+        loss_str = f"Loss={loss:.4f}" if not np.isnan(loss) else "Loss=N/A"
+        threshold_str = f"T={snapshot_threshold:.3f}" if use_adaptive_threshold else f"T={threshold:.3f}"
+        debug_str = f"|W|={weights_norm:.3f}"
+        if weights_change > 0:
+            debug_str += f" Δ={weights_change:.4f}"
+        debug_str += f" P_mean={prob_mean:.3f} Pred_fraud={pred_fraud_count} {threshold_str}"
+        ax.set_title(f"t-SNE Snapshot (iter {iteration}, {loss_str})\n{debug_str}", fontsize=9, fontweight='bold')
+        ax.set_xlabel("t-SNE Component 1", fontsize=9)
+        ax.set_ylabel("t-SNE Component 2", fontsize=9)
         ax.grid(False)
         fig.tight_layout()
 

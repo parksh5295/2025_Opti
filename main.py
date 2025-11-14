@@ -920,7 +920,8 @@ def run_pipeline(args: argparse.Namespace) -> None:
                     data["y_train_res"],
                     snapshots,
                     tracker.result_dir,
-                    threshold,
+                    threshold=threshold,
+                    use_adaptive_threshold=True,  # Use snapshot-specific threshold
                     gif=args.tsne_gif,
                     gif_duration=args.tsne_gif_duration,
                 )
