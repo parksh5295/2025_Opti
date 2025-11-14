@@ -410,6 +410,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
 
     reuse_ga_data = None
     if args.reuse_ga_run:
+        print(f"[GA Reuse] Attempting to load GA results from run: {args.reuse_ga_run}")
         if args.reuse_ga_method:
             candidate_methods = [args.reuse_ga_method]
         else:
@@ -420,33 +421,42 @@ def run_pipeline(args: argparse.Namespace) -> None:
                 candidate_methods.append("with_hessian")
 
         base_root = ExperimentTracker.compute_data_root(args.data_path)
+        print(f"[GA Reuse] Searching in data root: {base_root}")
+        print(f"[GA Reuse] Candidate method labels: {candidate_methods}")
         reuse_state_path = None
         reuse_method = None
         for candidate in candidate_methods:
             candidate_path = base_root / "log" / candidate / args.reuse_ga_run / "state.json"
+            print(f"[GA Reuse] Checking: {candidate_path} (exists: {candidate_path.exists()})")
             if candidate_path.exists():
                 reuse_state_path = candidate_path
                 reuse_method = candidate
+                print(f"[GA Reuse] Found state file at: {reuse_state_path}")
                 break
         if reuse_state_path is None:
             raise FileNotFoundError(
-                "Reusable GA state not found for any candidate method label. Checked: "
-                + ", ".join(candidate_methods)
+                f"Reusable GA state not found for any candidate method label. Checked: {', '.join(candidate_methods)}\n"
+                f"Searched in: {base_root / 'log'}"
             )
         reuse_state = json.loads(reuse_state_path.read_text(encoding="utf-8"))
         if "ga" not in reuse_state.get("stages", {}):
             raise RuntimeError("Specified reusable GA run does not contain GA stage information.")
         reuse_result_dir = Path(reuse_state["result_dir"])
+        print(f"[GA Reuse] Loading GA results from: {reuse_result_dir}")
         ga_stage = reuse_state["stages"]["ga"]
         ga_artifacts = ga_stage["artifacts"]
         selected_features_path = reuse_result_dir / ga_artifacts["selected_features"]["path"]
+        if not selected_features_path.exists():
+            raise FileNotFoundError(f"GA selected_features file not found: {selected_features_path}")
         selected_features = json.loads(selected_features_path.read_text(encoding="utf-8"))
+        print(f"[GA Reuse] Loaded {len(selected_features)} selected features")
         redundancy_penalty = ga_stage["metadata"].get("redundancy_penalty")
         best_score = ga_stage["metadata"].get("best_score")
         history = None
         if "ga_history" in ga_artifacts:
             history_path = reuse_result_dir / ga_artifacts["ga_history"]["path"]
-            history = json.loads(history_path.read_text(encoding="utf-8"))
+            if history_path.exists():
+                history = json.loads(history_path.read_text(encoding="utf-8"))
         reuse_ga_data = {
             "selected_features": selected_features,
             "redundancy_penalty": redundancy_penalty,
@@ -455,6 +465,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
             "source_run": args.reuse_ga_run,
             "source_method": reuse_method,
         }
+        print(f"[GA Reuse] Successfully loaded GA data from run: {args.reuse_ga_run} (method: {reuse_method})")
 
     try:
         # ------------------------------------------------------------------
@@ -634,6 +645,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
             ga_score = ga_data.get("best_score")
             redundancy_penalty = ga_data.get("redundancy_penalty")
         elif reuse_ga_data is not None:
+            print(f"[GA] Reusing GA results from run: {reuse_ga_data['source_run']} (method: {reuse_ga_data['source_method']})")
             selected_features = [feat for feat in reuse_ga_data["selected_features"] if feat in feature_columns]
             if not selected_features:
                 raise RuntimeError("Reusable GA features are not present in current dataset.")
