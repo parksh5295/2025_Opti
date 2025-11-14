@@ -31,6 +31,8 @@ class GradientDescentConfig:
     adam_epsilon: float = 1e-8
     use_second_order: bool = False
     second_order_method: str = "none"  # "none" or "bfgs"
+    track_snapshots: bool = False
+    snapshot_interval: int = 5
 
 
 def gradient_descent_cost_sensitive(
@@ -56,11 +58,15 @@ def gradient_descent_cost_sensitive(
     v_b = 0.0
 
     history: Dict[str, List[float]] = {"loss": []} if config.track_history else {}
+    snapshots: List[Dict[str, object]] = [] if config.track_snapshots else []
 
     prev_loss = np.inf
     beta1 = config.adam_beta1
     beta2 = config.adam_beta2
     epsilon = config.adam_epsilon
+
+    if config.track_snapshots:
+        snapshots.append({"iteration": 0, "weights": weights.copy(), "bias": bias})
 
     for iteration in range(1, config.max_iter + 1):
         loss = cost_sensitive_nll(weights, bias, X, y, sample_weight)
@@ -118,10 +124,17 @@ def gradient_descent_cost_sensitive(
         if config.track_history:
             history.setdefault("loss", []).append(loss)
 
+        if config.track_snapshots and (
+            iteration % config.snapshot_interval == 0 or iteration == config.max_iter
+        ):
+            snapshots.append({"iteration": iteration, "weights": weights.copy(), "bias": bias})
+
         if config.verbose and iteration % 50 == 0:
             print(f"[Solver] Iter {iteration:04d} | Loss={loss:.6f}")
 
         if abs(prev_loss - loss) < config.tolerance:
+            if config.track_snapshots and snapshots and snapshots[-1]["iteration"] != iteration:
+                snapshots.append({"iteration": iteration, "weights": weights.copy(), "bias": bias})
             break
         prev_loss = loss
 
@@ -131,6 +144,7 @@ def gradient_descent_cost_sensitive(
         "iterations": iteration,
         "history": history,
         "final_loss": loss,
+        "snapshots": snapshots,
     }
 
 
@@ -150,6 +164,10 @@ def bfgs_cost_sensitive(
     H = np.eye(n_features + 1)
 
     history: Dict[str, List[float]] = {"loss": []} if config.track_history else {}
+    snapshots: List[Dict[str, object]] = [] if config.track_snapshots else []
+
+    if config.track_snapshots:
+        snapshots.append({"iteration": 0, "weights": theta[:-1].copy(), "bias": float(theta[-1])})
 
     for iteration in range(1, config.max_iter + 1):
         loss, grad = cost_sensitive_nll_full(theta, X_aug, y, sample_weight)
@@ -193,7 +211,14 @@ def bfgs_cost_sensitive(
         if config.verbose and iteration % 50 == 0:
             print(f"[Solver-BFGS] Iter {iteration:04d} | Loss={loss:.6f}")
 
+        if config.track_snapshots and (
+            iteration % config.snapshot_interval == 0 or iteration == config.max_iter
+        ):
+            snapshots.append({"iteration": iteration, "weights": theta_new[:-1].copy(), "bias": float(theta_new[-1])})
+
         if np.linalg.norm(s) < config.tolerance:
+            if config.track_snapshots and snapshots and snapshots[-1]["iteration"] != iteration:
+                snapshots.append({"iteration": iteration, "weights": theta_new[:-1].copy(), "bias": float(theta_new[-1])})
             theta = theta_new
             break
 
@@ -208,6 +233,7 @@ def bfgs_cost_sensitive(
         "iterations": iteration,
         "history": history,
         "final_loss": new_loss,
+        "snapshots": snapshots,
     }
 
 

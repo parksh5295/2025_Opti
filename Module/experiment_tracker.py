@@ -364,6 +364,7 @@ class ExperimentTracker:
         val_score: float,
         solver_details: Dict[str, Any],
         model: Optional[Any] = None,
+        snapshots: Optional[list[Dict[str, Any]]] = None,
     ) -> None:
         stage = "solver"
         stage_dir = self.result_dir / stage
@@ -392,7 +393,15 @@ class ExperimentTracker:
         details_path.write_text(json.dumps({"backend": backend, **solver_details}), encoding="utf-8")
         artifacts["solver_details"] = {"type": "json", "path": self._relpath(details_path)}
 
-        metadata = {"backend": backend, "val_score": val_score}
+        if snapshots:
+            snapshots_path = stage_dir / "snapshots.json"
+            snapshots_path.write_text(
+                json.dumps(snapshots, default=self._json_default, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            artifacts["snapshots"] = {"type": "json", "path": self._relpath(snapshots_path)}
+
+        metadata = {"backend": backend, "val_score": val_score, "num_snapshots": len(snapshots or [])}
         self._record_stage(stage, artifacts, metadata)
 
     def load_solver_results(self) -> Dict[str, Any]:
@@ -413,6 +422,9 @@ class ExperimentTracker:
             bias_meta = json.loads((self.result_dir / artifacts["bias"]["path"]).read_text(encoding="utf-8"))
             results["weights"] = weights
             results["bias"] = bias_meta["bias"]
+            if "snapshots" in artifacts:
+                snapshot_path = self.result_dir / artifacts["snapshots"]["path"]
+                results["snapshots"] = json.loads(snapshot_path.read_text(encoding="utf-8"))
         elif backend == "sklearn":
             results["model"] = load(self.result_dir / artifacts["model"]["path"])
 

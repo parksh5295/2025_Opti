@@ -32,6 +32,7 @@ from Module import (
     configure_sklearn_like_model,
     evaluate_model,
     format_cost_sensitive_summary,
+    generate_tsne_snapshots,
     load_and_preprocess,
     solve_cost_sensitive_logistic,
     solver_predict_proba,
@@ -725,6 +726,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
         train_weights = compute_sample_weights(data["y_train_res"], args.cost_beta)
         weights: Optional[np.ndarray] = None
         bias: Optional[float] = None
+        snapshots: Optional[List[Dict[str, object]]] = None
         threshold: float
         val_score: float
 
@@ -735,6 +737,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
             val_score = solver_results["val_score"]
             solver_backend = solver_results["backend"]
             solver_details = solver_results["solver_details"]
+            snapshots = solver_results.get("snapshots")
 
             if solver_backend == "custom":
                 weights = solver_results["weights"]
@@ -760,6 +763,8 @@ def run_pipeline(args: argparse.Namespace) -> None:
                     adam_beta2=args.solver_adam_beta2,
                     adam_epsilon=args.solver_adam_epsilon,
                     second_order_method=args.solver_second_order,
+                    track_snapshots=args.tsne_snapshots,
+                    snapshot_interval=max(1, args.tsne_interval),
                 )
 
                 solver_output = solve_cost_sensitive_logistic(
@@ -771,6 +776,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
 
                 weights = solver_output["weights"]
                 bias = solver_output["bias"]
+                snapshots = solver_output.get("snapshots")
                 print(
                     f"[Solver] Converged in {solver_output['iterations']} iterations | "
                     f"Loss={solver_output['final_loss']:.6f}"
@@ -785,6 +791,8 @@ def run_pipeline(args: argparse.Namespace) -> None:
                     "method": args.solver_method,
                     "second_order": args.solver_second_order,
                     "iterations": solver_output["iterations"],
+                    "snapshots_recorded": len(snapshots or []),
+                    "snapshot_interval": max(1, args.tsne_interval),
                 }
             else:
                 model = LogisticRegression(
@@ -829,6 +837,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
                 val_score,
                 solver_details,
                 model=model if solver_backend == "sklearn" else None,
+                snapshots=snapshots if (solver_backend == "custom" and args.tsne_snapshots and snapshots) else None,
             )
             tracker.log_event(
                 "solver",
@@ -897,6 +906,45 @@ def run_pipeline(args: argparse.Namespace) -> None:
         print(f"[Evaluation] Overall score: {evaluation['overall_score']:.4f}")
         print("[Evaluation] Classification report:\n" + evaluation["classification_report"])
         print("[Evaluation] Confusion matrix:\n", evaluation["confusion_matrix"])
+
+        if args.tsne_snapshots and solver_backend == "custom":
+            if not snapshots:
+                tracker.log_event(
+                    "visualisation",
+                    "t-SNE snapshots requested but solver snapshots are unavailable",
+                    level=logging.WARNING,
+                )
+            else:
+                tsne_outputs = generate_tsne_snapshots(
+                    data["X_train_res"][selected_features],
+                    data["y_train_res"],
+                    snapshots,
+                    tracker.result_dir,
+                    threshold,
+                    gif=args.tsne_gif,
+                    gif_duration=args.tsne_gif_duration,
+                )
+                if tsne_outputs:
+                    relative_files: List[str] = []
+                    for path in tsne_outputs:
+                        try:
+                            relative_files.append(str(path.relative_to(tracker.result_dir)))
+                        except ValueError:
+                            relative_files.append(str(path))
+                    tracker.log_event(
+                        "visualisation",
+                        "Generated t-SNE solver snapshots",
+                        {
+                            "files": relative_files,
+                            "count": len(tsne_outputs),
+                        },
+                    )
+                else:
+                    tracker.log_event(
+                        "visualisation",
+                        "t-SNE snapshot generation produced no files",
+                        level=logging.WARNING,
+                    )
 
         if not args.skip_explainability:
             try:
@@ -1031,6 +1079,28 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument("--solver-verbose", action="store_true", help="Print solver progress information.")
     parser.add_argument("--solver-track-history", action="store_true", help="Record loss history during solver optimisation.")
+    parser.add_argument(
+        "--tsne-snapshots",
+        action="store_true",
+        help="Generate t-SNE visualisations of solver predictions at snapshot intervals (custom solver only).",
+    )
+    parser.add_argument(
+        "--tsne-interval",
+        type=int,
+        default=5,
+        help="Iteration interval used when capturing solver parameter snapshots (custom solver only).",
+    )
+    parser.add_argument(
+        "--tsne-gif",
+        action="store_true",
+        help="Combine generated t-SNE snapshots into an animated GIF.",
+    )
+    parser.add_argument(
+        "--tsne-gif-duration",
+        type=float,
+        default=0.6,
+        help="Frame duration, in seconds, for the animated t-SNE GIF.",
+    )
     parser.add_argument("--skip-explainability", action="store_true", help="Skip SHAP-based explainability step.")
     parser.add_argument("--random-state", type=int, default=42, help="Random seed used across the pipeline.")
     return parser.parse_args()

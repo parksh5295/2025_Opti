@@ -11,6 +11,8 @@ shap = ">=0.44"
 gurobipy = ">=11.0"
 pymoo = ">=0.6.1"
 six = ">=1.16,<1.17"
+matplotlib = ">=3.8"
+imageio = ">=2.34"
 
 [dev-packages]
 

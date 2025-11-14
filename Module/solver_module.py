@@ -32,6 +32,8 @@ class SolverConfig:
     adam_beta2: float = 0.999
     adam_epsilon: float = 1e-8
     second_order_method: str = "none"  # "none" or "bfgs"
+    track_snapshots: bool = False
+    snapshot_interval: int = 5
 
 
 def solve_cost_sensitive_logistic(
@@ -61,6 +63,8 @@ def solve_cost_sensitive_logistic(
         adam_epsilon=config.adam_epsilon,
         use_second_order=config.second_order_method.lower() != "none",
         second_order_method=config.second_order_method.lower(),
+        track_snapshots=config.track_snapshots,
+        snapshot_interval=config.snapshot_interval,
     )
 
     if gd_config.use_second_order and gd_config.second_order_method == "bfgs":
