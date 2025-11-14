@@ -66,7 +66,7 @@ def generate_actual_labels_tsne(
     
     # Compute t-SNE embedding
     print(f"[t-SNE] Computing t-SNE embedding on {len(X_used)} samples...")
-    tsne = TSNE(n_components=2, random_state=42, init="pca", learning_rate="auto", n_iter=1000)
+    tsne = TSNE(n_components=2, random_state=42, init="pca", learning_rate="auto", max_iter=1000)
     embedding = tsne.fit_transform(X_used.to_numpy(dtype=float))
     print("[t-SNE] Embedding completed")
     
