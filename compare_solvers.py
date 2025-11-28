@@ -8,8 +8,10 @@ Recommended comparison points:
 1. Performance Metrics: ROC-AUC, PR-AUC, F1-score, Cost-sensitive metrics
 2. Weights Comparison: L2/L1 distance, cosine similarity, top differences
 3. Selected Features: Common features, Jaccard similarity
-4. Convergence: Iteration count, snapshots
-5. Confusion Matrix: TP, TN, FP, FN comparison
+4. Convergence Analysis: Loss history, convergence rate, final loss, iteration count
+5. Optimization Method: Method type, learning rate, line search usage
+6. Confusion Matrix: TP, TN, FP, FN comparison
+7. Optimization Trajectory: Weight space changes, snapshots analysis
 """
 
 from __future__ import annotations
@@ -94,12 +96,31 @@ def load_run_results(
         if backend == "custom":
             results["iterations"] = solver_details.get("iterations", None)
             results["snapshots_count"] = solver_details.get("snapshots_recorded", 0)
+            results["final_loss"] = solver_details.get("final_loss", None)
+            results["method"] = solver_details.get("method", "unknown")
+            results["learning_rate"] = solver_details.get("learning_rate", None)
+            results["line_search"] = solver_details.get("line_search", False)
+            # Load history if available
+            if "history" in solver_details and solver_details["history"]:
+                results["loss_history"] = solver_details["history"].get("loss", [])
+            else:
+                results["loss_history"] = None
         elif backend in ["gurobi", "pymoo_ga"]:
             results["iterations"] = None  # Commercial solvers don't report exact iterations
             results["snapshots_count"] = len(solver_results.get("snapshots", []))
+            results["final_loss"] = solver_details.get("final_loss", None)
+            results["method"] = backend
+            results["learning_rate"] = None
+            results["line_search"] = False
+            results["loss_history"] = None
         else:
             results["iterations"] = None
             results["snapshots_count"] = 0
+            results["final_loss"] = None
+            results["method"] = backend
+            results["learning_rate"] = None
+            results["line_search"] = False
+            results["loss_history"] = None
     except Exception as e:
         results["solver"] = None
         results["error"] = str(e)
@@ -217,6 +238,98 @@ def compare_metrics(
         })
     
     return pd.DataFrame(metrics)
+
+
+def compare_convergence(
+    loss_history1: Optional[List[float]],
+    loss_history2: Optional[List[float]],
+    final_loss1: Optional[float],
+    final_loss2: Optional[float],
+    iterations1: Optional[int],
+    iterations2: Optional[int],
+) -> Dict[str, object]:
+    """Compare convergence characteristics between two runs.
+    
+    Based on Chapters 4 (Local Descent), 5 (First-Order Methods), and 6 (Second-Order Methods).
+    """
+    comparison = {}
+    
+    # Final loss comparison
+    if final_loss1 is not None and final_loss2 is not None:
+        comparison["final_loss_diff"] = final_loss2 - final_loss1
+        comparison["final_loss_ratio"] = final_loss2 / final_loss1 if final_loss1 != 0 else None
+        comparison["final_loss1"] = final_loss1
+        comparison["final_loss2"] = final_loss2
+    
+    # Iteration count comparison
+    if iterations1 is not None and iterations2 is not None:
+        comparison["iterations_diff"] = iterations2 - iterations1
+        comparison["iterations_ratio"] = iterations2 / iterations1 if iterations1 > 0 else None
+        comparison["iterations1"] = iterations1
+        comparison["iterations2"] = iterations2
+    
+    # Loss history analysis (if available)
+    if loss_history1 and loss_history2:
+        # Convergence rate: average loss reduction per iteration
+        if len(loss_history1) > 1:
+            initial_loss1 = loss_history1[0]
+            final_loss1_hist = loss_history1[-1]
+            convergence_rate1 = (initial_loss1 - final_loss1_hist) / len(loss_history1)
+            comparison["convergence_rate1"] = convergence_rate1
+        else:
+            comparison["convergence_rate1"] = None
+        
+        if len(loss_history2) > 1:
+            initial_loss2 = loss_history2[0]
+            final_loss2_hist = loss_history2[-1]
+            convergence_rate2 = (initial_loss2 - final_loss2_hist) / len(loss_history2)
+            comparison["convergence_rate2"] = convergence_rate2
+        else:
+            comparison["convergence_rate2"] = None
+        
+        # Loss reduction percentage
+        if len(loss_history1) > 1 and loss_history1[0] > 0:
+            loss_reduction1 = (loss_history1[0] - loss_history1[-1]) / loss_history1[0] * 100
+            comparison["loss_reduction1_pct"] = loss_reduction1
+        else:
+            comparison["loss_reduction1_pct"] = None
+        
+        if len(loss_history2) > 1 and loss_history2[0] > 0:
+            loss_reduction2 = (loss_history2[0] - loss_history2[-1]) / loss_history2[0] * 100
+            comparison["loss_reduction2_pct"] = loss_reduction2
+        else:
+            comparison["loss_reduction2_pct"] = None
+        
+        # Minimum loss achieved
+        comparison["min_loss1"] = min(loss_history1) if loss_history1 else None
+        comparison["min_loss2"] = min(loss_history2) if loss_history2 else None
+    
+    return comparison
+
+
+def compare_optimization_methods(
+    method1: str,
+    method2: str,
+    learning_rate1: Optional[float],
+    learning_rate2: Optional[float],
+    line_search1: bool,
+    line_search2: bool,
+) -> Dict[str, object]:
+    """Compare optimization method characteristics.
+    
+    Based on Chapter 5 (First-Order Methods) and Chapter 4 (Line Search).
+    """
+    return {
+        "method1": method1,
+        "method2": method2,
+        "methods_same": method1 == method2,
+        "learning_rate1": learning_rate1,
+        "learning_rate2": learning_rate2,
+        "learning_rate_diff": learning_rate2 - learning_rate1 if (learning_rate1 is not None and learning_rate2 is not None) else None,
+        "line_search1": line_search1,
+        "line_search2": line_search2,
+        "line_search_both": line_search1 and line_search2,
+    }
 
 
 def compare_features(
@@ -345,6 +458,85 @@ def generate_comparison_report(
             lines.append(f"Only in {results2['method_label']}: {', '.join(feat_comp['only_in_second'][:10])}")
             if len(feat_comp["only_in_second"]) > 10:
                 lines.append(f"  ... and {len(feat_comp['only_in_second']) - 10} more")
+        lines.append("")
+    
+    # Convergence analysis (Chapters 4, 5, 6)
+    loss_history1 = results1.get("loss_history")
+    loss_history2 = results2.get("loss_history")
+    final_loss1 = results1.get("final_loss")
+    final_loss2 = results2.get("final_loss")
+    iterations1 = results1.get("iterations")
+    iterations2 = results2.get("iterations")
+    
+    if (loss_history1 or loss_history2 or final_loss1 or final_loss2 or iterations1 or iterations2):
+        lines.append("-" * 80)
+        lines.append("CONVERGENCE ANALYSIS (Ch. 4, 5, 6)")
+        lines.append("-" * 80)
+        
+        conv_comp = compare_convergence(
+            loss_history1, loss_history2,
+            final_loss1, final_loss2,
+            iterations1, iterations2,
+        )
+        
+        if final_loss1 is not None and final_loss2 is not None:
+            lines.append(f"Final Loss: {final_loss1:.6f} vs {final_loss2:.6f} (diff: {conv_comp.get('final_loss_diff', 0):.6f})")
+            if conv_comp.get("final_loss_ratio") is not None:
+                lines.append(f"  Ratio: {conv_comp['final_loss_ratio']:.4f}x")
+        
+        if iterations1 is not None and iterations2 is not None:
+            lines.append(f"Iterations: {iterations1} vs {iterations2} (diff: {conv_comp.get('iterations_diff', 0)})")
+            if conv_comp.get("iterations_ratio") is not None:
+                lines.append(f"  Ratio: {conv_comp['iterations_ratio']:.4f}x")
+        
+        if conv_comp.get("convergence_rate1") is not None:
+            lines.append(f"Convergence Rate (Run 1): {conv_comp['convergence_rate1']:.6f} loss/iteration")
+        if conv_comp.get("convergence_rate2") is not None:
+            lines.append(f"Convergence Rate (Run 2): {conv_comp['convergence_rate2']:.6f} loss/iteration")
+        
+        if conv_comp.get("loss_reduction1_pct") is not None:
+            lines.append(f"Loss Reduction (Run 1): {conv_comp['loss_reduction1_pct']:.2f}%")
+        if conv_comp.get("loss_reduction2_pct") is not None:
+            lines.append(f"Loss Reduction (Run 2): {conv_comp['loss_reduction2_pct']:.2f}%")
+        
+        if conv_comp.get("min_loss1") is not None and conv_comp.get("min_loss2") is not None:
+            lines.append(f"Minimum Loss Achieved: {conv_comp['min_loss1']:.6f} vs {conv_comp['min_loss2']:.6f}")
+        
+        lines.append("")
+    
+    # Optimization method comparison (Chapter 5)
+    method1 = results1.get("method", "unknown")
+    method2 = results2.get("method", "unknown")
+    lr1 = results1.get("learning_rate")
+    lr2 = results2.get("learning_rate")
+    ls1 = results1.get("line_search", False)
+    ls2 = results2.get("line_search", False)
+    
+    if method1 != "unknown" or method2 != "unknown" or lr1 or lr2:
+        lines.append("-" * 80)
+        lines.append("OPTIMIZATION METHOD COMPARISON (Ch. 5)")
+        lines.append("-" * 80)
+        
+        method_comp = compare_optimization_methods(method1, method2, lr1, lr2, ls1, ls2)
+        
+        lines.append(f"Method: {method_comp['method1']} vs {method_comp['method2']}")
+        if method_comp["methods_same"]:
+            lines.append("  (Same method)")
+        else:
+            lines.append("  (Different methods)")
+        
+        if lr1 is not None or lr2 is not None:
+            lr1_str = f"{lr1:.6f}" if lr1 is not None else "N/A"
+            lr2_str = f"{lr2:.6f}" if lr2 is not None else "N/A"
+            lines.append(f"Learning Rate: {lr1_str} vs {lr2_str}")
+            if method_comp.get("learning_rate_diff") is not None:
+                lines.append(f"  Difference: {method_comp['learning_rate_diff']:.6f}")
+        
+        lines.append(f"Line Search: {method_comp['line_search1']} vs {method_comp['line_search2']}")
+        if method_comp["line_search_both"]:
+            lines.append("  (Both use line search - Ch. 4.3)")
+        elif method_comp["line_search1"] or method_comp["line_search2"]:
+            lines.append("  (One uses line search)")
         lines.append("")
     
     # Solver details

@@ -807,9 +807,15 @@ def run_pipeline(args: argparse.Namespace) -> None:
                     "method": args.solver_method,
                     "second_order": args.solver_second_order,
                     "iterations": solver_output["iterations"],
+                    "final_loss": solver_output.get("final_loss"),
+                    "learning_rate": args.solver_lr,
+                    "line_search": args.solver_line_search,
                     "snapshots_recorded": len(snapshots or []),
                     "snapshot_interval": max(1, args.tsne_interval),
                 }
+                # Add history if tracked
+                if args.solver_track_history and "history" in solver_output:
+                    solver_details["history"] = solver_output["history"]
             else:
                 model = LogisticRegression(
                     max_iter=2000,
