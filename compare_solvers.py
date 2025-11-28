@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -32,22 +34,29 @@ def load_run_results(
     data_path: Path,
     method_label: str,
     run_name: Optional[str] = None,
+    auto_run: bool = False,
 ) -> Dict[str, object]:
     """Load all results from a specific run.
     
     If run_name is None, automatically finds the latest completed run for the method_label.
+    If no completed run exists and auto_run=True, automatically runs the pipeline.
     """
     # If run_name is not specified, find the latest completed run
     if run_name is None:
         latest_state = ExperimentTracker.find_latest_completed_state(data_path, method_label)
         if latest_state is None:
-            raise FileNotFoundError(
-                f"No completed runs found for method_label: {method_label}. "
-                f"Please specify --run1-name or --run2-name explicitly, or ensure there is at least one completed run."
-            )
-        # Extract run_name from state file path
-        run_name = latest_state.parent.name
-        print(f"[Comparison] Auto-selected latest completed run: {run_name} (method: {method_label})")
+            if auto_run:
+                print(f"[Comparison] No completed runs found for {method_label}. Running pipeline automatically...")
+                run_name = _auto_run_pipeline(data_path, method_label)
+            else:
+                raise FileNotFoundError(
+                    f"No completed runs found for method_label: {method_label}. "
+                    f"Please specify --run1-name or --run2-name explicitly, or use --auto-run to automatically execute missing runs."
+                )
+        else:
+            # Extract run_name from state file path
+            run_name = latest_state.parent.name
+            print(f"[Comparison] Auto-selected latest completed run: {run_name} (method: {method_label})")
     
     tracker = ExperimentTracker(
         data_path=data_path,
@@ -140,6 +149,65 @@ def load_run_results(
         results["error_eval"] = str(e)
     
     return results
+
+
+def _auto_run_pipeline(data_path: Path, method_label: str) -> str:
+    """Automatically run the pipeline for a given method_label.
+    
+    Returns the run_name of the newly created run.
+    """
+    # Determine which script to run based on method_label
+    if method_label.startswith("commercial_"):
+        # Commercial solver
+        solver_name = method_label.replace("commercial_", "")
+        script = "main_commercial.py"
+        cmd = [
+            sys.executable,
+            script,
+            "--data-path", str(data_path),
+            "--solver", solver_name,
+        ]
+    else:
+        # Custom solver
+        script = "main.py"
+        cmd = [
+            sys.executable,
+            script,
+            "--data-path", str(data_path),
+            "--solver-backend", "custom",
+        ]
+        
+        # Determine solver method based on method_label
+        if method_label == "with_hessian":
+            cmd.extend(["--solver-second-order", "bfgs"])
+        elif method_label == "without_hessian":
+            cmd.extend(["--solver-method", "adam"])  # Default first-order method
+    
+    print(f"[Comparison] Executing: {' '.join(cmd)}")
+    try:
+        result = subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+            cwd=Path(__file__).parent,
+        )
+        print(f"[Comparison] Pipeline execution completed successfully")
+        
+        # Find the newly created run
+        latest_state = ExperimentTracker.find_latest_completed_state(data_path, method_label)
+        if latest_state is None:
+            raise RuntimeError(f"Pipeline executed but no completed run found for {method_label}")
+        
+        run_name = latest_state.parent.name
+        print(f"[Comparison] New run created: {run_name}")
+        return run_name
+        
+    except subprocess.CalledProcessError as e:
+        print(f"[Comparison] Error executing pipeline: {e}")
+        print(f"[Comparison] stdout: {e.stdout}")
+        print(f"[Comparison] stderr: {e.stderr}")
+        raise RuntimeError(f"Failed to auto-run pipeline for {method_label}") from e
 
 
 def compare_weights(
@@ -615,6 +683,18 @@ def main() -> None:
         default=None,
         help="Output path for comparison report. If not specified, prints to stdout.",
     )
+    parser.add_argument(
+        "--auto-run",
+        action="store_true",
+        default=True,
+        help="Automatically run pipelines for missing runs instead of raising an error (default: True).",
+    )
+    parser.add_argument(
+        "--no-auto-run",
+        dest="auto_run",
+        action="store_false",
+        help="Disable automatic pipeline execution for missing runs.",
+    )
     
     args = parser.parse_args()
     
@@ -623,14 +703,14 @@ def main() -> None:
         print(f"[Comparison] Loading Run 1: {args.run1_method} / {args.run1_name}")
     else:
         print(f"[Comparison] Loading Run 1: {args.run1_method} (auto-selecting latest completed run)")
-    results1 = load_run_results(args.data_path, args.run1_method, args.run1_name)
+    results1 = load_run_results(args.data_path, args.run1_method, args.run1_name, auto_run=args.auto_run)
     
     # Load run 2
     if args.run2_name:
         print(f"[Comparison] Loading Run 2: {args.run2_method} / {args.run2_name}")
     else:
         print(f"[Comparison] Loading Run 2: {args.run2_method} (auto-selecting latest completed run)")
-    results2 = load_run_results(args.data_path, args.run2_method, args.run2_name)
+    results2 = load_run_results(args.data_path, args.run2_method, args.run2_name, auto_run=args.auto_run)
     
     # Check for errors
     if "error" in results1:
