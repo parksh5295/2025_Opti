@@ -73,6 +73,26 @@ def load_run_results(
     
     # Load solver results
     try:
+        # Check if solver stage is completed before trying to load
+        if not tracker.is_completed("solver"):
+            if auto_run:
+                print(f"[Comparison] Solver stage not completed for {method_label}/{run_name}. Re-running pipeline...")
+                run_name, actual_method_label = _auto_run_pipeline(data_path, method_label)
+                # Update tracker with new run
+                tracker = ExperimentTracker(
+                    data_path=data_path,
+                    method_label=actual_method_label,
+                    run_name=run_name,
+                )
+                # Wait for file system sync
+                import time
+                time.sleep(2)
+            else:
+                raise KeyError(
+                    f"Solver stage not completed for {method_label}/{run_name}. "
+                    f"Use --auto-run to automatically re-run the pipeline."
+                )
+        
         solver_results = tracker.load_solver_results()
         results["solver"] = solver_results
         backend = solver_results.get("backend", "unknown")
@@ -216,6 +236,26 @@ def load_run_results(
     
     # Load evaluation results
     try:
+        # Check if evaluation stage is completed before trying to load
+        if not tracker.is_completed("evaluation"):
+            if auto_run and "error" not in results:
+                print(f"[Comparison] Evaluation stage not completed for {method_label}/{run_name}. Re-running pipeline...")
+                run_name, actual_method_label = _auto_run_pipeline(data_path, method_label)
+                # Update tracker with new run
+                tracker = ExperimentTracker(
+                    data_path=data_path,
+                    method_label=actual_method_label,
+                    run_name=run_name,
+                )
+                # Wait for file system sync
+                import time
+                time.sleep(2)
+            else:
+                raise KeyError(
+                    f"Evaluation stage not completed for {method_label}/{run_name}. "
+                    f"Use --auto-run to automatically re-run the pipeline."
+                )
+        
         evaluation = tracker.load_evaluation()
         results["evaluation"] = evaluation
         results["roc_auc"] = evaluation.get("roc_auc", 0.0)
