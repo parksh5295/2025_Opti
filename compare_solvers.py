@@ -71,88 +71,113 @@ def load_run_results(
         "run_name": run_name,
     }
     
-    # Load solver results
-    try:
-        # Check if solver stage is completed before trying to load
-        if not tracker.is_completed("solver"):
-            if auto_run:
-                print(f"[Comparison] Solver stage not completed for {method_label}/{run_name}. Re-running pipeline...")
-                run_name, actual_method_label = _auto_run_pipeline(data_path, method_label)
-                # Update tracker with new run
-                tracker = ExperimentTracker(
-                    data_path=data_path,
-                    method_label=actual_method_label,
-                    run_name=run_name,
-                )
-                # Wait for file system sync
-                import time
-                time.sleep(2)
-            else:
-                raise KeyError(
-                    f"Solver stage not completed for {method_label}/{run_name}. "
-                    f"Use --auto-run to automatically re-run the pipeline."
-                )
-        
-        solver_results = tracker.load_solver_results()
-        results["solver"] = solver_results
-        backend = solver_results.get("backend", "unknown")
-        results["backend"] = backend
-        
-        # Extract weights and bias
-        if backend == "custom":
-            results["weights"] = solver_results.get("weights")
-            results["bias"] = solver_results.get("bias")
-        elif backend in ["gurobi", "pymoo_ga", "sklearn"]:
-            # Commercial solvers also save weights/bias
-            results["weights"] = solver_results.get("weights")
-            results["bias"] = solver_results.get("bias")
-            
-            # Fallback to model if weights not available (for sklearn)
-            if results["weights"] is None:
-                model = solver_results.get("model")
-                if model is not None:
-                    results["weights"] = model.coef_.ravel()
-                    results["bias"] = float(model.intercept_[0])
-        
-        # Solver details
-        solver_details = solver_results.get("solver_details", {})
-        results["solver_details"] = solver_details
-        results["threshold"] = solver_results.get("threshold", 0.5)
-        results["val_score"] = solver_results.get("val_score", 0.0)
-        
-        # Selected features
-        results["selected_features"] = solver_details.get("selected_features", [])
-        
-        # Iteration info
-        if backend == "custom":
-            results["iterations"] = solver_details.get("iterations", None)
-            results["snapshots_count"] = solver_details.get("snapshots_recorded", 0)
-            results["final_loss"] = solver_details.get("final_loss", None)
-            results["method"] = solver_details.get("method", "unknown")
-            results["learning_rate"] = solver_details.get("learning_rate", None)
-            results["line_search"] = solver_details.get("line_search", False)
-            # Load history if available
-            if "history" in solver_details and solver_details["history"]:
-                results["loss_history"] = solver_details["history"].get("loss", [])
-            else:
-                results["loss_history"] = None
-        elif backend in ["gurobi", "pymoo_ga"]:
-            results["iterations"] = None  # Commercial solvers don't report exact iterations
-            results["snapshots_count"] = len(solver_results.get("snapshots", []))
-            results["final_loss"] = solver_details.get("final_loss", None)
-            results["method"] = backend
-            results["learning_rate"] = None
-            results["line_search"] = False
-            results["loss_history"] = None
+    # Check if solver stage is completed before trying to load
+    if not tracker.is_completed("solver"):
+        if auto_run:
+            print(f"[Comparison] Solver stage not completed for {method_label}/{run_name}. Re-running pipeline...")
+            run_name, actual_method_label = _auto_run_pipeline(data_path, method_label)
+            # Update tracker with new run
+            tracker = ExperimentTracker(
+                data_path=data_path,
+                method_label=actual_method_label,
+                run_name=run_name,
+            )
+            # Wait for file system sync
+            import time
+            time.sleep(2)
+            # Update results with new run info
+            results["method_label"] = actual_method_label
+            results["run_name"] = run_name
         else:
-            results["iterations"] = None
-            results["snapshots_count"] = 0
-            results["final_loss"] = None
-            results["method"] = backend
-            results["learning_rate"] = None
-            results["line_search"] = False
-            results["loss_history"] = None
-    except Exception as e:
+            results["solver"] = None
+            results["error"] = (
+                f"Solver stage not completed for {method_label}/{run_name}. "
+                f"Use --auto-run to automatically re-run the pipeline."
+            )
+            # Skip loading solver results - set to empty dict to avoid further processing
+            solver_results = {}
+    
+    # Load solver results
+    solver_results = None  # Initialize variable
+    if "error" not in results:
+        try:
+            if not tracker.is_completed("solver"):
+                # This should have been caught earlier, but double-check
+                if auto_run:
+                    print(f"[Comparison] Solver stage still not completed. Re-running pipeline...")
+                    run_name, actual_method_label = _auto_run_pipeline(data_path, method_label)
+                    tracker = ExperimentTracker(
+                        data_path=data_path,
+                        method_label=actual_method_label,
+                        run_name=run_name,
+                    )
+                    import time
+                    time.sleep(2)
+                    results["method_label"] = actual_method_label
+                    results["run_name"] = run_name
+                else:
+                    raise KeyError(f"Solver stage not completed for {method_label}/{run_name}")
+            
+            solver_results = tracker.load_solver_results()
+            results["solver"] = solver_results
+            backend = solver_results.get("backend", "unknown")
+            results["backend"] = backend
+            
+            # Extract weights and bias
+            if backend == "custom":
+                results["weights"] = solver_results.get("weights")
+                results["bias"] = solver_results.get("bias")
+            elif backend in ["gurobi", "pymoo_ga", "sklearn"]:
+                # Commercial solvers also save weights/bias
+                results["weights"] = solver_results.get("weights")
+                results["bias"] = solver_results.get("bias")
+                
+                # Fallback to model if weights not available (for sklearn)
+                if results["weights"] is None:
+                    model = solver_results.get("model")
+                    if model is not None:
+                        results["weights"] = model.coef_.ravel()
+                        results["bias"] = float(model.intercept_[0])
+            
+            # Solver details
+            solver_details = solver_results.get("solver_details", {})
+            results["solver_details"] = solver_details
+            results["threshold"] = solver_results.get("threshold", 0.5)
+            results["val_score"] = solver_results.get("val_score", 0.0)
+            
+            # Selected features
+            results["selected_features"] = solver_details.get("selected_features", [])
+            
+            # Iteration info
+            if backend == "custom":
+                results["iterations"] = solver_details.get("iterations", None)
+                results["snapshots_count"] = solver_details.get("snapshots_recorded", 0)
+                results["final_loss"] = solver_details.get("final_loss", None)
+                results["method"] = solver_details.get("method", "unknown")
+                results["learning_rate"] = solver_details.get("learning_rate", None)
+                results["line_search"] = solver_details.get("line_search", False)
+                # Load history if available
+                if "history" in solver_details and solver_details["history"]:
+                    results["loss_history"] = solver_details["history"].get("loss", [])
+                else:
+                    results["loss_history"] = None
+            elif backend in ["gurobi", "pymoo_ga"]:
+                results["iterations"] = None  # Commercial solvers don't report exact iterations
+                results["snapshots_count"] = len(solver_results.get("snapshots", []))
+                results["final_loss"] = solver_details.get("final_loss", None)
+                results["method"] = backend
+                results["learning_rate"] = None
+                results["line_search"] = False
+                results["loss_history"] = None
+            else:
+                results["iterations"] = None
+                results["snapshots_count"] = 0
+                results["final_loss"] = None
+                results["method"] = backend
+                results["learning_rate"] = None
+                results["line_search"] = False
+                results["loss_history"] = None
+        except Exception as e:
         # If loading fails and auto_run is enabled, try to run the pipeline
         if auto_run and run_name is not None:
             print(f"[Comparison] Failed to load solver results for {method_label}/{run_name}: {e}")
@@ -234,37 +259,62 @@ def load_run_results(
             results["solver"] = None
             results["error"] = str(e)
     
+    # Check if evaluation stage is completed before trying to load
+    if not tracker.is_completed("evaluation"):
+        if auto_run and "error" not in results:
+            print(f"[Comparison] Evaluation stage not completed for {method_label}/{run_name}. Re-running pipeline...")
+            run_name, actual_method_label = _auto_run_pipeline(data_path, method_label)
+            # Update tracker with new run
+            tracker = ExperimentTracker(
+                data_path=data_path,
+                method_label=actual_method_label,
+                run_name=run_name,
+            )
+            # Wait for file system sync
+            import time
+            time.sleep(2)
+            # Update results with new run info
+            results["method_label"] = actual_method_label
+            results["run_name"] = run_name
+        else:
+            results["evaluation"] = None
+            results["error_eval"] = (
+                f"Evaluation stage not completed for {method_label}/{run_name}. "
+                f"Use --auto-run to automatically re-run the pipeline."
+            )
+            # Skip loading evaluation
+            evaluation = None
+    
     # Load evaluation results
-    try:
-        # Check if evaluation stage is completed before trying to load
-        if not tracker.is_completed("evaluation"):
-            if auto_run and "error" not in results:
-                print(f"[Comparison] Evaluation stage not completed for {method_label}/{run_name}. Re-running pipeline...")
-                run_name, actual_method_label = _auto_run_pipeline(data_path, method_label)
-                # Update tracker with new run
-                tracker = ExperimentTracker(
-                    data_path=data_path,
-                    method_label=actual_method_label,
-                    run_name=run_name,
-                )
-                # Wait for file system sync
-                import time
-                time.sleep(2)
-            else:
-                raise KeyError(
-                    f"Evaluation stage not completed for {method_label}/{run_name}. "
-                    f"Use --auto-run to automatically re-run the pipeline."
-                )
-        
-        evaluation = tracker.load_evaluation()
-        results["evaluation"] = evaluation
-        results["roc_auc"] = evaluation.get("roc_auc", 0.0)
-        results["pr_auc"] = evaluation.get("pr_auc", 0.0)
-        results["f1"] = evaluation.get("f1", 0.0)
-        results["overall_score"] = evaluation.get("overall_score", 0.0)
-        results["cost_sensitive"] = evaluation.get("cost_sensitive", {})
-        results["confusion_matrix"] = evaluation.get("confusion_matrix", None)
-    except Exception as e:
+    evaluation = None  # Initialize variable
+    if "error_eval" not in results:
+        try:
+            if not tracker.is_completed("evaluation"):
+                # This should have been caught earlier, but double-check
+                if auto_run and "error" not in results:
+                    print(f"[Comparison] Evaluation stage still not completed. Re-running pipeline...")
+                    run_name, actual_method_label = _auto_run_pipeline(data_path, method_label)
+                    tracker = ExperimentTracker(
+                        data_path=data_path,
+                        method_label=actual_method_label,
+                        run_name=run_name,
+                    )
+                    import time
+                    time.sleep(2)
+                    results["method_label"] = actual_method_label
+                    results["run_name"] = run_name
+                else:
+                    raise KeyError(f"Evaluation stage not completed for {method_label}/{run_name}")
+            
+            evaluation = tracker.load_evaluation()
+            results["evaluation"] = evaluation
+            results["roc_auc"] = evaluation.get("roc_auc", 0.0)
+            results["pr_auc"] = evaluation.get("pr_auc", 0.0)
+            results["f1"] = evaluation.get("f1", 0.0)
+            results["overall_score"] = evaluation.get("overall_score", 0.0)
+            results["cost_sensitive"] = evaluation.get("cost_sensitive", {})
+            results["confusion_matrix"] = evaluation.get("confusion_matrix", None)
+        except Exception as e:
         # If loading fails and auto_run is enabled, try to run the pipeline
         if auto_run and run_name is not None and "error" not in results:
             print(f"[Comparison] Failed to load evaluation results for {method_label}/{run_name}: {e}")
