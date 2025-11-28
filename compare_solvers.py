@@ -207,7 +207,31 @@ def _auto_run_pipeline(data_path: Path, method_label: str) -> str:
         print(f"[Comparison] Error executing pipeline: {e}")
         print(f"[Comparison] stdout: {e.stdout}")
         print(f"[Comparison] stderr: {e.stderr}")
-        raise RuntimeError(f"Failed to auto-run pipeline for {method_label}") from e
+        
+        # Check for specific error types and provide helpful messages
+        error_output = (e.stdout + "\n" + e.stderr).lower()
+        
+        if "gurobi" in error_output and ("license" in error_output or "size-limited" in error_output):
+            raise RuntimeError(
+                f"Failed to auto-run pipeline for {method_label}.\n"
+                f"Gurobi license limitation: The model is too large for the size-limited license.\n"
+                f"Please either:\n"
+                f"  1. Use a different solver (e.g., --run2-method commercial_sklearn or commercial_pymoo_ga)\n"
+                f"  2. Manually run the pipeline with a smaller dataset or different configuration\n"
+                f"  3. Obtain an unrestricted Gurobi license"
+            ) from e
+        elif "gurobi" in error_output:
+            raise RuntimeError(
+                f"Failed to auto-run pipeline for {method_label}.\n"
+                f"Gurobi error occurred. Please check the error messages above.\n"
+                f"Consider using a different solver (e.g., --run2-method commercial_sklearn)."
+            ) from e
+        else:
+            raise RuntimeError(
+                f"Failed to auto-run pipeline for {method_label}.\n"
+                f"Please check the error messages above and run the pipeline manually:\n"
+                f"  {' '.join(cmd)}"
+            ) from e
 
 
 def compare_weights(
