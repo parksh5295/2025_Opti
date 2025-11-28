@@ -107,13 +107,17 @@ def run_pymoo_ga(
     if track_snapshots:
         callback = GenerationCallback(X, y, cost_beta, snapshot_interval)
     
-    result = minimize(
-        problem,
-        algorithm,
-        termination=("n_gen", generations),
-        verbose=False,
-        callback=callback,
-    )
+    # Only pass callback if it's not None (pymoo doesn't handle None callbacks well)
+    minimize_kwargs = {
+        "problem": problem,
+        "algorithm": algorithm,
+        "termination": ("n_gen", generations),
+        "verbose": False,
+    }
+    if callback is not None:
+        minimize_kwargs["callback"] = callback
+    
+    result = minimize(**minimize_kwargs)
     
     best_mask = result.X.astype(bool)
     
