@@ -752,11 +752,15 @@ def run_pipeline(args: argparse.Namespace) -> None:
             snapshots = solver_results.get("snapshots")
 
             if solver_backend == "custom":
-                weights = solver_results["weights"]
-                bias = solver_results["bias"]
+                weights = solver_results.get("weights")
+                bias = solver_results.get("bias")
+                if weights is None or bias is None:
+                    raise RuntimeError("Custom solver results missing weights or bias.")
                 model = configure_sklearn_like_model(weights, bias, selected_features)
             else:
-                model = solver_results["model"]
+                model = solver_results.get("model")
+                if model is None:
+                    raise RuntimeError(f"Solver results missing model for backend: {solver_backend}")
         else:
             tracker.log_event("solver", "Training final classifier")
             if args.solver_backend == "custom":
@@ -870,8 +874,10 @@ def run_pipeline(args: argparse.Namespace) -> None:
             if solver_backend == "custom":
                 if weights is None or bias is None:
                     solver_results = tracker.load_solver_results()
-                    weights = solver_results["weights"]
-                    bias = solver_results["bias"]
+                    weights = solver_results.get("weights")
+                    bias = solver_results.get("bias")
+                    if weights is None or bias is None:
+                        raise RuntimeError("Custom solver results missing weights or bias.")
                 test_probabilities = solver_predict_proba(
                     data["X_test_scaled"][selected_features], weights, bias
                 )

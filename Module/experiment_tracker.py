@@ -102,6 +102,7 @@ class ExperimentTracker:
 
     @classmethod
     def find_latest_state(cls, data_path: Path, method_label: str) -> Optional[Path]:
+        """Find the latest incomplete (running/interrupted/failed) run."""
         data_root = cls.compute_data_root(data_path)
         log_root = data_root / "log" / method_label
         if not log_root.exists():
@@ -124,6 +125,40 @@ class ExperimentTracker:
                 except Exception:
                     timestamp = datetime.min
                 candidates.append((timestamp, state_path))
+
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return candidates[0][1]
+
+    @classmethod
+    def find_latest_completed_state(cls, data_path: Path, method_label: str) -> Optional[Path]:
+        """Find the latest completed run for comparison purposes."""
+        data_root = cls.compute_data_root(data_path)
+        log_root = data_root / "log" / method_label
+        if not log_root.exists():
+            return None
+
+        candidates: list[tuple[datetime, Path]] = []
+        for run_dir in log_root.iterdir():
+            state_path = run_dir / "state.json"
+            if not state_path.exists():
+                continue
+            try:
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                continue
+            status = state.get("status")
+            # Only consider completed runs
+            if status == "completed":
+                # Check if evaluation stage exists (ensures full pipeline completion)
+                if "evaluation" in state.get("stages", {}):
+                    updated = state.get("updated_at") or state.get("created_at")
+                    try:
+                        timestamp = datetime.fromisoformat(updated)
+                    except Exception:
+                        timestamp = datetime.min
+                    candidates.append((timestamp, state_path))
 
         if not candidates:
             return None
@@ -417,15 +452,21 @@ class ExperimentTracker:
             "solver_details": json.loads((self.result_dir / artifacts["solver_details"]["path"]).read_text(encoding="utf-8")),
         }
 
-        if backend == "custom":
+        # Load weights and bias (available for all backends)
+        if "weights" in artifacts:
             weights = np.load(self.result_dir / artifacts["weights"]["path"])
-            bias_meta = json.loads((self.result_dir / artifacts["bias"]["path"]).read_text(encoding="utf-8"))
             results["weights"] = weights
+        if "bias" in artifacts:
+            bias_meta = json.loads((self.result_dir / artifacts["bias"]["path"]).read_text(encoding="utf-8"))
             results["bias"] = bias_meta["bias"]
-            if "snapshots" in artifacts:
-                snapshot_path = self.result_dir / artifacts["snapshots"]["path"]
-                results["snapshots"] = json.loads(snapshot_path.read_text(encoding="utf-8"))
-        elif backend == "sklearn":
+        
+        # Load snapshots if available
+        if "snapshots" in artifacts:
+            snapshot_path = self.result_dir / artifacts["snapshots"]["path"]
+            results["snapshots"] = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        
+        # Load model if available (for sklearn or other backends that save models)
+        if "model" in artifacts:
             results["model"] = load(self.result_dir / artifacts["model"]["path"])
 
         return results
