@@ -160,12 +160,20 @@ def _auto_run_pipeline(data_path: Path, method_label: str) -> str:
     if method_label.startswith("commercial_"):
         # Commercial solver
         solver_name = method_label.replace("commercial_", "")
+        # Map common aliases to actual solver names
+        solver_map = {
+            "pymoo": "pymoo_ga",  # Allow pymoo as alias for pymoo_ga
+            "gurobi": "gurobi",
+            "sklearn": "sklearn",
+        }
+        actual_solver = solver_map.get(solver_name, solver_name)
+        
         script = "main_commercial.py"
         cmd = [
             sys.executable,
             script,
             "--data-path", str(data_path),
-            "--solver", solver_name,
+            "--solver", actual_solver,
         ]
     else:
         # Custom solver
@@ -220,11 +228,18 @@ def _auto_run_pipeline(data_path: Path, method_label: str) -> str:
                 f"  2. Manually run the pipeline with a smaller dataset or different configuration\n"
                 f"  3. Obtain an unrestricted Gurobi license"
             ) from e
+        elif "invalid choice" in error_output or "argument --solver" in error_output:
+            raise RuntimeError(
+                f"Failed to auto-run pipeline for {method_label}.\n"
+                f"Invalid solver name. Valid choices are: 'gurobi', 'pymoo_ga', 'sklearn'.\n"
+                f"Note: Use 'commercial_pymoo_ga' (not 'commercial_pymoo') for pymoo solver.\n"
+                f"Please use a valid method_label (e.g., --run2-method commercial_pymoo_ga or commercial_sklearn)."
+            ) from e
         elif "gurobi" in error_output:
             raise RuntimeError(
                 f"Failed to auto-run pipeline for {method_label}.\n"
                 f"Gurobi error occurred. Please check the error messages above.\n"
-                f"Consider using a different solver (e.g., --run2-method commercial_sklearn)."
+                f"Consider using a different solver (e.g., --run2-method commercial_sklearn or commercial_pymoo_ga)."
             ) from e
         else:
             raise RuntimeError(
