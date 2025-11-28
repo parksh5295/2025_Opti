@@ -42,12 +42,13 @@ def load_run_results(
     If no completed run exists and auto_run=True, automatically runs the pipeline.
     """
     # If run_name is not specified, find the latest completed run
+    actual_method_label = method_label  # Track the actual method_label used
     if run_name is None:
         latest_state = ExperimentTracker.find_latest_completed_state(data_path, method_label)
         if latest_state is None:
             if auto_run:
                 print(f"[Comparison] No completed runs found for {method_label}. Running pipeline automatically...")
-                run_name = _auto_run_pipeline(data_path, method_label)
+                run_name, actual_method_label = _auto_run_pipeline(data_path, method_label)
             else:
                 raise FileNotFoundError(
                     f"No completed runs found for method_label: {method_label}. "
@@ -58,9 +59,10 @@ def load_run_results(
             run_name = latest_state.parent.name
             print(f"[Comparison] Auto-selected latest completed run: {run_name} (method: {method_label})")
     
+    # Use actual_method_label for tracker (in case alias was used)
     tracker = ExperimentTracker(
         data_path=data_path,
-        method_label=method_label,
+        method_label=actual_method_label,
         run_name=run_name,
     )
     
@@ -131,8 +133,75 @@ def load_run_results(
             results["line_search"] = False
             results["loss_history"] = None
     except Exception as e:
-        results["solver"] = None
-        results["error"] = str(e)
+        # If loading fails and auto_run is enabled, try to run the pipeline
+        if auto_run and run_name is not None:
+            print(f"[Comparison] Failed to load solver results for {method_label}/{run_name}: {e}")
+            print(f"[Comparison] Attempting to re-run pipeline...")
+            try:
+                run_name, actual_method_label = _auto_run_pipeline(data_path, method_label)
+                # Update tracker with new run
+                tracker = ExperimentTracker(
+                    data_path=data_path,
+                    method_label=actual_method_label,
+                    run_name=run_name,
+                )
+                # Retry loading
+                solver_results = tracker.load_solver_results()
+                results["solver"] = solver_results
+                backend = solver_results.get("backend", "unknown")
+                results["backend"] = backend
+                # ... (rest of the loading logic, same as above)
+                if backend == "custom":
+                    results["weights"] = solver_results.get("weights")
+                    results["bias"] = solver_results.get("bias")
+                elif backend in ["gurobi", "pymoo_ga", "sklearn"]:
+                    results["weights"] = solver_results.get("weights")
+                    results["bias"] = solver_results.get("bias")
+                    if results["weights"] is None:
+                        model = solver_results.get("model")
+                        if model is not None:
+                            results["weights"] = model.coef_.ravel()
+                            results["bias"] = float(model.intercept_[0])
+                solver_details = solver_results.get("solver_details", {})
+                results["solver_details"] = solver_details
+                results["threshold"] = solver_results.get("threshold", 0.5)
+                results["val_score"] = solver_results.get("val_score", 0.0)
+                results["selected_features"] = solver_details.get("selected_features", [])
+                if backend == "custom":
+                    results["iterations"] = solver_details.get("iterations", None)
+                    results["snapshots_count"] = solver_details.get("snapshots_recorded", 0)
+                    results["final_loss"] = solver_details.get("final_loss", None)
+                    results["method"] = solver_details.get("method", "unknown")
+                    results["learning_rate"] = solver_details.get("learning_rate", None)
+                    results["line_search"] = solver_details.get("line_search", False)
+                    if "history" in solver_details and solver_details["history"]:
+                        results["loss_history"] = solver_details["history"].get("loss", [])
+                    else:
+                        results["loss_history"] = None
+                elif backend in ["gurobi", "pymoo_ga"]:
+                    results["iterations"] = None
+                    results["snapshots_count"] = len(solver_results.get("snapshots", []))
+                    results["final_loss"] = solver_details.get("final_loss", None)
+                    results["method"] = backend
+                    results["learning_rate"] = None
+                    results["line_search"] = False
+                    results["loss_history"] = None
+                else:
+                    results["iterations"] = None
+                    results["snapshots_count"] = 0
+                    results["final_loss"] = None
+                    results["method"] = backend
+                    results["learning_rate"] = None
+                    results["line_search"] = False
+                    results["loss_history"] = None
+                results["method_label"] = actual_method_label  # Update method_label
+                print(f"[Comparison] Successfully loaded results after re-running pipeline")
+            except Exception as retry_error:
+                results["solver"] = None
+                results["error"] = f"Initial error: {e}. Retry error: {retry_error}"
+        else:
+            results["solver"] = None
+            results["error"] = str(e)
     
     # Load evaluation results
     try:
@@ -145,18 +214,48 @@ def load_run_results(
         results["cost_sensitive"] = evaluation.get("cost_sensitive", {})
         results["confusion_matrix"] = evaluation.get("confusion_matrix", None)
     except Exception as e:
-        results["evaluation"] = None
-        results["error_eval"] = str(e)
+        # If loading fails and auto_run is enabled, try to run the pipeline
+        if auto_run and run_name is not None and "error" not in results:
+            print(f"[Comparison] Failed to load evaluation results for {method_label}/{run_name}: {e}")
+            print(f"[Comparison] Attempting to re-run pipeline...")
+            try:
+                run_name, actual_method_label = _auto_run_pipeline(data_path, method_label)
+                # Update tracker with new run
+                tracker = ExperimentTracker(
+                    data_path=data_path,
+                    method_label=actual_method_label,
+                    run_name=run_name,
+                )
+                # Retry loading evaluation
+                evaluation = tracker.load_evaluation()
+                results["evaluation"] = evaluation
+                results["roc_auc"] = evaluation.get("roc_auc", 0.0)
+                results["pr_auc"] = evaluation.get("pr_auc", 0.0)
+                results["f1"] = evaluation.get("f1", 0.0)
+                results["overall_score"] = evaluation.get("overall_score", 0.0)
+                results["cost_sensitive"] = evaluation.get("cost_sensitive", {})
+                results["confusion_matrix"] = evaluation.get("confusion_matrix", None)
+                results["method_label"] = actual_method_label  # Update method_label
+                print(f"[Comparison] Successfully loaded evaluation after re-running pipeline")
+            except Exception as retry_error:
+                results["evaluation"] = None
+                results["error_eval"] = f"Initial error: {e}. Retry error: {retry_error}"
+        else:
+            results["evaluation"] = None
+            results["error_eval"] = str(e)
     
     return results
 
 
-def _auto_run_pipeline(data_path: Path, method_label: str) -> str:
+def _auto_run_pipeline(data_path: Path, method_label: str) -> tuple[str, str]:
     """Automatically run the pipeline for a given method_label.
     
-    Returns the run_name of the newly created run.
+    Returns a tuple of (run_name, actual_method_label) where actual_method_label
+    is the method_label that was actually used to save the run.
     """
     # Determine which script to run based on method_label
+    actual_method_label = method_label  # Track the actual method_label used
+    
     if method_label.startswith("commercial_"):
         # Commercial solver
         solver_name = method_label.replace("commercial_", "")
@@ -167,6 +266,8 @@ def _auto_run_pipeline(data_path: Path, method_label: str) -> str:
             "sklearn": "sklearn",
         }
         actual_solver = solver_map.get(solver_name, solver_name)
+        # Update actual_method_label to match what will be saved
+        actual_method_label = f"commercial_{actual_solver}"
         
         script = "main_commercial.py"
         cmd = [
@@ -202,14 +303,17 @@ def _auto_run_pipeline(data_path: Path, method_label: str) -> str:
         )
         print(f"[Comparison] Pipeline execution completed successfully")
         
-        # Find the newly created run
-        latest_state = ExperimentTracker.find_latest_completed_state(data_path, method_label)
+        # Find the newly created run using the actual method_label
+        latest_state = ExperimentTracker.find_latest_completed_state(data_path, actual_method_label)
         if latest_state is None:
-            raise RuntimeError(f"Pipeline executed but no completed run found for {method_label}")
+            raise RuntimeError(
+                f"Pipeline executed but no completed run found for {actual_method_label}. "
+                f"Note: If you used an alias (e.g., 'commercial_pymoo'), the run was saved as '{actual_method_label}'."
+            )
         
         run_name = latest_state.parent.name
-        print(f"[Comparison] New run created: {run_name}")
-        return run_name
+        print(f"[Comparison] New run created: {run_name} (method: {actual_method_label})")
+        return run_name, actual_method_label
         
     except subprocess.CalledProcessError as e:
         print(f"[Comparison] Error executing pipeline: {e}")
