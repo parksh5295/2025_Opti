@@ -136,6 +136,9 @@ def load_run_results(
         # If loading fails and auto_run is enabled, try to run the pipeline
         if auto_run and run_name is not None:
             print(f"[Comparison] Failed to load solver results for {method_label}/{run_name}: {e}")
+            print(f"[Comparison] Error type: {type(e).__name__}")
+            import traceback
+            print(f"[Comparison] Error details: {traceback.format_exc()}")
             print(f"[Comparison] Attempting to re-run pipeline...")
             try:
                 run_name, actual_method_label = _auto_run_pipeline(data_path, method_label)
@@ -145,6 +148,9 @@ def load_run_results(
                     method_label=actual_method_label,
                     run_name=run_name,
                 )
+                # Wait a moment for file system to sync
+                import time
+                time.sleep(1)
                 # Retry loading
                 solver_results = tracker.load_solver_results()
                 results["solver"] = solver_results
@@ -198,7 +204,12 @@ def load_run_results(
                 print(f"[Comparison] Successfully loaded results after re-running pipeline")
             except Exception as retry_error:
                 results["solver"] = None
-                results["error"] = f"Initial error: {e}. Retry error: {retry_error}"
+                import traceback
+                results["error"] = (
+                    f"Initial error: {type(e).__name__}: {e}\n"
+                    f"Retry error: {type(retry_error).__name__}: {retry_error}\n"
+                    f"Retry traceback: {traceback.format_exc()}"
+                )
         else:
             results["solver"] = None
             results["error"] = str(e)
@@ -239,7 +250,12 @@ def load_run_results(
                 print(f"[Comparison] Successfully loaded evaluation after re-running pipeline")
             except Exception as retry_error:
                 results["evaluation"] = None
-                results["error_eval"] = f"Initial error: {e}. Retry error: {retry_error}"
+                import traceback
+                results["error_eval"] = (
+                    f"Initial error: {type(e).__name__}: {e}\n"
+                    f"Retry error: {type(retry_error).__name__}: {retry_error}\n"
+                    f"Retry traceback: {traceback.format_exc()}"
+                )
         else:
             results["evaluation"] = None
             results["error_eval"] = str(e)
@@ -303,12 +319,48 @@ def _auto_run_pipeline(data_path: Path, method_label: str) -> tuple[str, str]:
         )
         print(f"[Comparison] Pipeline execution completed successfully")
         
+        # Wait a moment for file system to sync and state to be written
+        import time
+        time.sleep(2)
+        
         # Find the newly created run using the actual method_label
-        latest_state = ExperimentTracker.find_latest_completed_state(data_path, actual_method_label)
+        # Try multiple times in case the state file hasn't been written yet
+        latest_state = None
+        for attempt in range(5):
+            latest_state = ExperimentTracker.find_latest_completed_state(data_path, actual_method_label)
+            if latest_state is not None:
+                break
+            if attempt < 4:
+                print(f"[Comparison] Waiting for run to complete... (attempt {attempt + 1}/5)")
+                time.sleep(2)
+        
         if latest_state is None:
+            # Try to find any run (even if not completed) to get the run_name
+            data_root = ExperimentTracker.compute_data_root(data_path)
+            log_root = data_root / "log" / actual_method_label
+            if log_root.exists():
+                # Find the most recent run directory
+                run_dirs = sorted(log_root.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+                if run_dirs:
+                    latest_run_dir = run_dirs[0]
+                    run_name = latest_run_dir.name
+                    state_path = latest_run_dir / "state.json"
+                    if state_path.exists():
+                        import json
+                        state = json.loads(state_path.read_text(encoding="utf-8"))
+                        status = state.get("status", "unknown")
+                        print(f"[Comparison] Found run {run_name} with status: {status}")
+                        if status != "completed":
+                            raise RuntimeError(
+                                f"Pipeline executed but run {run_name} is not completed (status: {status}). "
+                                f"Please wait for the pipeline to finish or check the logs."
+                            )
+                        return run_name, actual_method_label
+            
             raise RuntimeError(
                 f"Pipeline executed but no completed run found for {actual_method_label}. "
-                f"Note: If you used an alias (e.g., 'commercial_pymoo'), the run was saved as '{actual_method_label}'."
+                f"Note: If you used an alias (e.g., 'commercial_pymoo'), the run was saved as '{actual_method_label}'. "
+                f"Please check the logs at {log_root if log_root.exists() else 'N/A'}."
             )
         
         run_name = latest_state.parent.name
