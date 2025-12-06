@@ -375,7 +375,19 @@ class ExperimentTracker:
 
         self._record_stage(stage, artifacts, meta)
 
-    def load_ga_results(self) -> Dict[str, Any]:
+    def load_ga_results(self, cache_dir: Optional[Path] = None) -> Dict[str, Any]:
+        """Load GA results, optionally from cache first."""
+        # Try cache first if provided
+        if cache_dir is not None and cache_dir.exists():
+            try:
+                from prepare_ga_features import load_ga_cache
+                cache_data = load_ga_cache(cache_dir)
+                if cache_data:
+                    return cache_data
+            except Exception:
+                pass  # Fall back to regular loading
+        
+        # Regular loading from run directory
         stage_info = self.state["stages"]["ga"]
         artifacts = stage_info["artifacts"]
         selected_features = json.loads((self.result_dir / artifacts["selected_features"]["path"]).read_text(encoding="utf-8"))

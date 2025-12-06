@@ -10,15 +10,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
-from numpy.typing import ArrayLike
-from scipy.optimize import minimize_scalar
-from sklearn.decomposition import PCA
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.feature_selection import mutual_info_classif
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import fbeta_score, mutual_info_score
-from sklearn.model_selection import StratifiedKFold
-from sklearn.preprocessing import KBinsDiscretizer
 
 from Module import (
     EvaluationConfig,
@@ -37,329 +29,21 @@ from Module import (
     solve_cost_sensitive_logistic,
     solver_predict_proba,
 )
-
-
-def normalise_scores(scores: Dict[str, float]) -> Dict[str, float]:
-    values = np.array(list(scores.values()), dtype=float)
-    min_val = values.min()
-    max_val = values.max()
-    if max_val - min_val < 1e-9:
-        return {feat: 1.0 for feat in scores}
-    return {feat: (val - min_val) / (max_val - min_val) for feat, val in scores.items()}
-
-
-def compute_pca_scores(
-    X_train: pd.DataFrame,
-    variance_threshold: float = 0.95,
-    random_state: int = 42,
-) -> Dict[str, float]:
-    pca = PCA(n_components=variance_threshold, random_state=random_state)
-    pca.fit(X_train)
-
-    loadings = np.abs(pca.components_) * pca.explained_variance_ratio_[:, np.newaxis]
-    scores = loadings.sum(axis=0)
-    score_map = dict(zip(X_train.columns, scores))
-    return normalise_scores(score_map)
-
-
-def compute_mutual_information_scores(
-    X_train: pd.DataFrame,
-    y_train: pd.Series,
-    random_state: int = 42,
-) -> Dict[str, float]:
-    mi = mutual_info_classif(
-        X_train,
-        y_train,
-        random_state=random_state,
-    )
-    score_map = dict(zip(X_train.columns, mi))
-    return normalise_scores(score_map)
-
-
-def compute_random_forest_scores(
-    X_train: pd.DataFrame,
-    y_train: pd.Series,
-    random_state: int = 42,
-) -> Dict[str, float]:
-    rf = RandomForestClassifier(
-        n_estimators=400,
-        max_depth=None,
-        random_state=random_state,
-        n_jobs=-1,
-        class_weight="balanced_subsample",
-    )
-    rf.fit(X_train, y_train)
-    importances = rf.feature_importances_
-    score_map = dict(zip(X_train.columns, importances))
-    return normalise_scores(score_map)
-
-
-def information_theoretic_ensemble_scores(
-    scores: Dict[str, Dict[str, float]],
-    weights: Dict[str, float],
-) -> Dict[str, float]:
-    combined: Dict[str, float] = {}
-    for source, feature_scores in scores.items():
-        weight = weights.get(source, 0.0)
-        for feature, value in feature_scores.items():
-            combined.setdefault(feature, 0.0)
-            combined[feature] += weight * value
-    return combined
-
-
-def compute_conditional_mutual_information_matrix(
-    X: pd.DataFrame,
-    y: pd.Series,
-    n_bins: int = 10,
-) -> pd.DataFrame:
-    discretiser = KBinsDiscretizer(n_bins=n_bins, encode="ordinal", strategy="quantile")
-    X_disc = discretiser.fit_transform(X)
-    feature_names = X.columns
-    classes = np.unique(y)
-    cmi_matrix = np.zeros((len(feature_names), len(feature_names)), dtype=float)
-
-    for i in range(len(feature_names)):
-        for j in range(i + 1, len(feature_names)):
-            value = 0.0
-            for cls in classes:
-                mask = y.values == cls
-                if np.sum(mask) < 2:
-                    continue
-                mi = mutual_info_score(X_disc[mask, i], X_disc[mask, j])
-                value += (np.sum(mask) / len(y)) * mi
-            cmi_matrix[i, j] = cmi_matrix[j, i] = value
-
-    return pd.DataFrame(cmi_matrix, index=feature_names, columns=feature_names).fillna(0.0)
-
-
-def compute_vif_scores(X: pd.DataFrame) -> pd.Series:
-    values = X.values
-    n_features = values.shape[1]
-    vif_scores = []
-
-    for i in range(n_features):
-        y_col = values[:, i]
-        X_other = np.delete(values, i, axis=1)
-        X_other = np.column_stack([np.ones(len(X_other)), X_other])
-        coef, _, _, _ = np.linalg.lstsq(X_other, y_col, rcond=None)
-        y_pred = X_other @ coef
-        residuals = y_col - y_pred
-        sse = np.sum(residuals ** 2)
-        sst = np.sum((y_col - y_col.mean()) ** 2)
-        if sst <= 0:
-            vif = 1.0
-        else:
-            r_squared = 1.0 - (sse / sst)
-            vif = 1.0 / max(1.0 - r_squared, 1e-6)
-        vif_scores.append(vif)
-
-    return pd.Series(vif_scores, index=X.columns, name="vif")
-
-
-def _normalise_matrix(matrix: pd.DataFrame) -> pd.DataFrame:
-    max_val = matrix.values.max()
-    min_val = matrix.values.min()
-    if max_val - min_val < 1e-9:
-        return pd.DataFrame(1.0, index=matrix.index, columns=matrix.columns)
-    norm_values = (matrix - min_val) / (max_val - min_val)
-    return norm_values.fillna(0.0)
-
-
-def build_redundancy_penalty_matrix(
-    X: pd.DataFrame,
-    y: pd.Series,
-    penalty_weights: Dict[str, float],
-) -> pd.DataFrame:
-    cmi = compute_conditional_mutual_information_matrix(X, y)
-    corr = X.corr().abs().fillna(0.0)
-    vif = compute_vif_scores(X)
-    vif_norm = (vif - vif.min()) / (vif.max() - vif.min() + 1e-9)
-    vif_matrix = pd.DataFrame(0.0, index=X.columns, columns=X.columns)
-    for i in X.columns:
-        for j in X.columns:
-            vif_matrix.loc[i, j] = 0.5 * (vif_norm.loc[i] + vif_norm.loc[j])
-
-    combined = (
-        penalty_weights.get("cmi", 0.5) * _normalise_matrix(cmi)
-        + penalty_weights.get("corr", 0.3) * corr
-        + penalty_weights.get("vif", 0.2) * vif_matrix
-    )
-
-    return combined.fillna(0.0)
-
-
-def redundancy_aware_selection(
-    feature_scores: Dict[str, float],
-    penalty_matrix: pd.DataFrame,
-    ensemble_weights: Dict[str, float],
-    budget: float,
-    min_features: int,
-) -> List[str]:
-    ranked = sorted(feature_scores.items(), key=lambda item: item[1], reverse=True)
-    selected: List[str] = []
-
-    for feature, _ in ranked:
-        if not selected:
-            selected.append(feature)
-            continue
-
-        penalty = 0.0
-        for chosen in selected:
-            penalty += (
-                ensemble_weights.get(feature, 0.0)
-                * ensemble_weights.get(chosen, 0.0)
-                * penalty_matrix.loc[feature, chosen]
-            )
-
-        if penalty <= budget or len(selected) < min_features:
-            selected.append(feature)
-
-    return selected
-
-
-def compute_subset_penalty(
-    features: Sequence[str],
-    penalty_matrix: pd.DataFrame,
-    ensemble_weights: Dict[str, float],
-) -> float:
-    penalty = 0.0
-    for i in range(len(features)):
-        for j in range(i + 1, len(features)):
-            fi, fj = features[i], features[j]
-            penalty += (
-                ensemble_weights.get(fi, 0.0)
-                * ensemble_weights.get(fj, 0.0)
-                * penalty_matrix.loc[fi, fj]
-            )
-    return penalty
-
-
-def cost_sensitive_negative_log_likelihood(
-    y_true: ArrayLike,
-    y_prob: ArrayLike,
-    sample_weight: ArrayLike,
-) -> float:
-    eps = 1e-9
-    y_prob = np.clip(y_prob, eps, 1 - eps)
-    y_true = np.asarray(y_true)
-    weights = np.asarray(sample_weight)
-    nll = -np.sum(
-        weights
-        * (
-            y_true * np.log(y_prob)
-            + (1 - y_true) * np.log(1 - y_prob)
-        )
-    )
-    return nll / np.sum(weights)
-
-
-def make_cost_sensitive_fitness(
-    feature_names: Sequence[str],
-    ensemble_weights: Dict[str, float],
-    penalty_matrix: pd.DataFrame,
-    lambda_penalty: float,
-    alpha_size: float,
-    cost_beta: float,
-    random_state: int,
-    cv_splits: int = 5,
-) -> callable:
-    feature_names = list(feature_names)
-    skf = StratifiedKFold(n_splits=cv_splits, shuffle=True, random_state=random_state)
-
-    def fitness(chromosome: np.ndarray, X: np.ndarray, y: ArrayLike) -> float:
-        indices = np.where(chromosome == 1)[0]
-        if indices.size == 0:
-            return -np.inf
-
-        selected_features = [feature_names[idx] for idx in indices]
-        subset_penalty = compute_subset_penalty(selected_features, penalty_matrix, ensemble_weights)
-
-        redundancy_term = lambda_penalty * subset_penalty
-        size_term = alpha_size * len(selected_features)
-
-        X_subset = X[:, indices]
-        y_array = np.asarray(y)
-
-        total_nll = 0.0
-        for train_idx, val_idx in skf.split(X_subset, y_array):
-            X_train, X_val = X_subset[train_idx], X_subset[val_idx]
-            y_train, y_val = y_array[train_idx], y_array[val_idx]
-
-            model = LogisticRegression(
-                max_iter=1500,
-                solver="lbfgs",
-                class_weight=None,
-                random_state=random_state,
-            )
-
-            sample_weight_train = np.where(y_train == 1, cost_beta, 1.0)
-            model.fit(X_train, y_train, sample_weight=sample_weight_train)
-
-            probabilities = model.predict_proba(X_val)[:, 1]
-            sample_weight_val = np.where(y_val == 1, cost_beta, 1.0)
-            total_nll += cost_sensitive_negative_log_likelihood(y_val, probabilities, sample_weight_val)
-
-        avg_nll = total_nll / cv_splits
-        fitness_score = -(avg_nll + redundancy_term + size_term)
-        return fitness_score
-
-    return fitness
-
-
-def optimise_threshold(
-    y_true: pd.Series,
-    y_prob: np.ndarray,
-    beta: float = 2.0,
-    sample_weight: ArrayLike | None = None,
-) -> Tuple[float, float]:
-    def objective(threshold: float) -> float:
-        preds = (y_prob >= threshold).astype(int)
-        score = fbeta_score(
-            y_true,
-            preds,
-            beta=beta,
-            zero_division=0,
-            sample_weight=sample_weight,
-        )
-        return -score
-
-    result = minimize_scalar(
-        objective,
-        bounds=(0.01, 0.99),
-        method="bounded",
-        options={"xatol": 1e-3},
-    )
-
-    best_threshold = float(result.x)
-    best_score = float(-result.fun)
-    return best_threshold, best_score
-
-
-def explain_with_shap(
-    model: LogisticRegression,
-    X: pd.DataFrame,
-    feature_names: Sequence[str],
-    max_samples: int = 1000,
-) -> None:
-    try:
-        import shap  # type: ignore
-    except ImportError:
-        print("[Explainability] SHAP not installed; skipping explanation.")
-        return
-
-    sample = X.sample(n=min(max_samples, len(X)), random_state=0)
-    explainer = shap.LinearExplainer(
-        model,
-        sample,
-        feature_perturbation="correlation_dependent",
-    )
-    shap_values = explainer.shap_values(sample)
-    importances = np.abs(shap_values).mean(axis=0)
-    ranked = sorted(zip(feature_names, importances), key=lambda item: item[1], reverse=True)
-    top_features = ranked[:10]
-    print("[Explainability] Top SHAP importances:")
-    for name, value in top_features:
-        print(f"  - {name}: {value:.4f}")
+from utils.explainability import explain_with_shap
+from utils.feature_selection_utils import (
+    build_redundancy_penalty_matrix,
+    compute_mutual_information_scores,
+    compute_pca_scores,
+    compute_random_forest_scores,
+    compute_subset_penalty,
+    information_theoretic_ensemble_scores,
+    redundancy_aware_selection,
+)
+from utils.optimization_utils import (
+    cost_sensitive_negative_log_likelihood,
+    make_cost_sensitive_fitness,
+    optimise_threshold,
+)
 
 
 def run_pipeline(args: argparse.Namespace) -> None:
@@ -638,91 +322,163 @@ def run_pipeline(args: argparse.Namespace) -> None:
         # ------------------------------------------------------------------
         # Stage: Genetic Algorithm
         # ------------------------------------------------------------------
-        if tracker.is_completed("ga"):
-            tracker.log_event("ga", "Loading cached GA results")
-            ga_data = tracker.load_ga_results()
-            selected_features = ga_data["selected_features"]
-            ga_score = ga_data.get("best_score")
-            redundancy_penalty = ga_data.get("redundancy_penalty")
-        elif reuse_ga_data is not None:
-            print(f"[GA] Reusing GA results from run: {reuse_ga_data['source_run']} (method: {reuse_ga_data['source_method']})")
-            selected_features = [feat for feat in reuse_ga_data["selected_features"] if feat in feature_columns]
-            if not selected_features:
-                raise RuntimeError("Reusable GA features are not present in current dataset.")
-            redundancy_penalty = reuse_ga_data["redundancy_penalty"]
-            if redundancy_penalty is None:
-                redundancy_penalty = compute_subset_penalty(selected_features, penalty_matrix, ensemble_scores)
-            ga_score = reuse_ga_data.get("best_score")
-            tracker.save_ga_results(
-                selected_features,
-                ga_score,
-                history=reuse_ga_data.get("history"),
-                redundancy_penalty=redundancy_penalty,
+        # Try to load from GA cache first (fixed name, not date-based)
+        ga_cache_dir = None
+        try:
+            from prepare_ga_features import compute_cache_key, get_cache_path, load_ga_cache
+            
+            cache_key = compute_cache_key(
+                args.data_path,
+                preprocessing_config,
+                ensemble_weights,
+                args.feature_ensemble_mode,
+                args.feature_ensemble_top_k,
+                {
+                    "cmi": args.penalty_weight_cmi,
+                    "corr": args.penalty_weight_corr,
+                    "vif": args.penalty_weight_vif,
+                },
+                args.redundancy_budget,
+                args.min_candidate_features,
+                GAConfig(
+                    population_size=args.ga_population,
+                    generations=args.ga_generations,
+                    mutation_prob=args.ga_mutation,
+                    random_state=random_state,
+                ),
+                args.lambda_penalty,
+                args.alpha_size,
+                args.cost_beta,
+                args.ga_cv_splits,
             )
+            ga_cache_dir = get_cache_path(args.data_path, cache_key)
+            cache_data = load_ga_cache(ga_cache_dir)
+            
+            if cache_data:
+                tracker.log_event("ga", "Loading GA results from fixed cache", {"cache_key": cache_key})
+                selected_features = cache_data["selected_features"]
+                ga_score = cache_data.get("best_score")
+                redundancy_penalty = cache_data.get("redundancy_penalty")
+                # Update penalty_matrix and candidate_features from cache if available
+                if cache_data.get("penalty_matrix") is not None:
+                    penalty_matrix = cache_data["penalty_matrix"]
+                if cache_data.get("candidate_features") is not None:
+                    candidate_features = cache_data["candidate_features"]
+                if cache_data.get("ensemble_scores"):
+                    ensemble_scores.update(cache_data["ensemble_scores"])
+                # Save to tracker for consistency
+                tracker.save_ga_results(
+                    selected_features,
+                    ga_score,
+                    history=cache_data.get("history"),
+                    redundancy_penalty=redundancy_penalty,
+                )
+                tracker.log_event(
+                    "ga",
+                    "GA results loaded from cache",
+                    {
+                        "cache_key": cache_key,
+                        "selected_features": len(selected_features),
+                    },
+                )
+            else:
+                ga_cache_dir = None  # Cache not found, fall through to normal logic
+        except Exception as e:
             tracker.log_event(
                 "ga",
-                "Reused GA results",
-                {
-                    "source_run": reuse_ga_data["source_run"],
-                    "source_method": reuse_ga_data["source_method"],
-                    "selected_features": len(selected_features),
-                },
+                "Failed to load GA cache, falling back to normal logic",
+                {"error": str(e)},
+                level=logging.WARNING,
             )
-        else:
-            tracker.log_event("ga", "Starting genetic algorithm optimisation")
-            fitness_fn = make_cost_sensitive_fitness(
-                feature_names=candidate_features,
-                ensemble_weights=ensemble_weights,
-                penalty_matrix=penalty_matrix,
-                lambda_penalty=args.lambda_penalty,
-                alpha_size=args.alpha_size,
-                cost_beta=args.cost_beta,
-                random_state=random_state,
-                cv_splits=args.ga_cv_splits,
-            )
+            ga_cache_dir = None
+        
+        if ga_cache_dir is None:
+            # Normal logic: check tracker or reuse_ga_data
+            if tracker.is_completed("ga"):
+                tracker.log_event("ga", "Loading cached GA results")
+                ga_data = tracker.load_ga_results()
+                selected_features = ga_data["selected_features"]
+                ga_score = ga_data.get("best_score")
+                redundancy_penalty = ga_data.get("redundancy_penalty")
+            elif reuse_ga_data is not None:
+                print(f"[GA] Reusing GA results from run: {reuse_ga_data['source_run']} (method: {reuse_ga_data['source_method']})")
+                selected_features = [feat for feat in reuse_ga_data["selected_features"] if feat in feature_columns]
+                if not selected_features:
+                    raise RuntimeError("Reusable GA features are not present in current dataset.")
+                redundancy_penalty = reuse_ga_data["redundancy_penalty"]
+                if redundancy_penalty is None:
+                    redundancy_penalty = compute_subset_penalty(selected_features, penalty_matrix, ensemble_scores)
+                ga_score = reuse_ga_data.get("best_score")
+                tracker.save_ga_results(
+                    selected_features,
+                    ga_score,
+                    history=reuse_ga_data.get("history"),
+                    redundancy_penalty=redundancy_penalty,
+                )
+                tracker.log_event(
+                    "ga",
+                    "Reused GA results",
+                    {
+                        "source_run": reuse_ga_data["source_run"],
+                        "source_method": reuse_ga_data["source_method"],
+                        "selected_features": len(selected_features),
+                    },
+                )
+            else:
+                tracker.log_event("ga", "Starting genetic algorithm optimisation")
+                fitness_fn = make_cost_sensitive_fitness(
+                    feature_names=candidate_features,
+                    ensemble_weights=ensemble_weights,
+                    penalty_matrix=penalty_matrix,
+                    lambda_penalty=args.lambda_penalty,
+                    alpha_size=args.alpha_size,
+                    cost_beta=args.cost_beta,
+                    random_state=random_state,
+                    cv_splits=args.ga_cv_splits,
+                )
 
-            estimator = LogisticRegression(
-                max_iter=1500,
-                solver="lbfgs",
-                class_weight=None,
-                random_state=random_state,
-            )
+                estimator = LogisticRegression(
+                    max_iter=1500,
+                    solver="lbfgs",
+                    class_weight=None,
+                    random_state=random_state,
+                )
 
-            ga_config = GAConfig(
-                population_size=args.ga_population,
-                generations=args.ga_generations,
-                mutation_prob=args.ga_mutation,
-                min_features=min(args.ga_min_features, len(candidate_features)),
-                max_features=len(candidate_features),
-                random_state=random_state,
-            )
+                ga_config = GAConfig(
+                    population_size=args.ga_population,
+                    generations=args.ga_generations,
+                    mutation_prob=args.ga_mutation,
+                    min_features=min(args.ga_min_features, len(candidate_features)),
+                    max_features=len(candidate_features),
+                    random_state=random_state,
+                )
 
-            selector = GeneticFeatureSelector(
-                estimator=estimator,
-                config=ga_config,
-                verbose=not args.ga_quiet,
-                fitness_function=fitness_fn,
-            )
+                selector = GeneticFeatureSelector(
+                    estimator=estimator,
+                    config=ga_config,
+                    verbose=not args.ga_quiet,
+                    fitness_function=fitness_fn,
+                )
 
-            selector.fit(data["X_train_res"][candidate_features], data["y_train_res"])
-            selected_features = selector.get_feature_names()
-            ga_score = selector.best_score_
-            redundancy_penalty = compute_subset_penalty(selected_features, penalty_matrix, ensemble_weights)
-            tracker.save_ga_results(
-                selected_features,
-                ga_score,
-                history=selector.history_,
-                redundancy_penalty=redundancy_penalty,
-            )
-            tracker.log_event(
-                "ga",
-                "Genetic algorithm completed",
-                {
-                    "selected_features": len(selected_features),
-                    "best_score": ga_score,
-                    "redundancy_penalty": redundancy_penalty,
-                },
-            )
+                selector.fit(data["X_train_res"][candidate_features], data["y_train_res"])
+                selected_features = selector.get_feature_names()
+                ga_score = selector.best_score_
+                redundancy_penalty = compute_subset_penalty(selected_features, penalty_matrix, ensemble_weights)
+                tracker.save_ga_results(
+                    selected_features,
+                    ga_score,
+                    history=selector.history_,
+                    redundancy_penalty=redundancy_penalty,
+                )
+                tracker.log_event(
+                    "ga",
+                    "Genetic algorithm completed",
+                    {
+                        "selected_features": len(selected_features),
+                        "best_score": ga_score,
+                        "redundancy_penalty": redundancy_penalty,
+                    },
+                )
 
         if redundancy_penalty is None:
             redundancy_penalty = compute_subset_penalty(selected_features, penalty_matrix, ensemble_weights)
