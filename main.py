@@ -29,6 +29,10 @@ from Module import (
     solve_cost_sensitive_logistic,
     solver_predict_proba,
 )
+from Module.genetic_algorithm_enhanced import (
+    EnhancedGAConfig,
+    EnhancedGeneticFeatureSelector,
+)
 from utils.explainability import explain_with_shap
 from utils.feature_selection_utils import (
     build_redundancy_penalty_matrix,
@@ -444,21 +448,44 @@ def run_pipeline(args: argparse.Namespace) -> None:
                     random_state=random_state,
                 )
 
-                ga_config = GAConfig(
-                    population_size=args.ga_population,
-                    generations=args.ga_generations,
-                    mutation_prob=args.ga_mutation,
-                    min_features=min(args.ga_min_features, len(candidate_features)),
-                    max_features=len(candidate_features),
-                    random_state=random_state,
-                )
+                # Use enhanced GA if enabled
+                if args.use_enhanced_ga:
+                    ga_config = EnhancedGAConfig(
+                        population_size=args.ga_population,
+                        generations=args.ga_generations,
+                        mutation_prob=args.ga_mutation,
+                        min_features=min(args.ga_min_features, len(candidate_features)),
+                        max_features=len(candidate_features),
+                        random_state=random_state,
+                        crossover_type=args.ga_crossover_type,
+                        use_local_search=args.ga_local_search,
+                        early_stopping_patience=args.ga_early_stopping,
+                        heuristic_init_ratio=args.ga_heuristic_init,
+                    )
 
-                selector = GeneticFeatureSelector(
-                    estimator=estimator,
-                    config=ga_config,
-                    verbose=not args.ga_quiet,
-                    fitness_function=fitness_fn,
-                )
+                    selector = EnhancedGeneticFeatureSelector(
+                        estimator=estimator,
+                        config=ga_config,
+                        verbose=not args.ga_quiet,
+                        fitness_function=fitness_fn,
+                        feature_importance=ensemble_scores,
+                    )
+                else:
+                    ga_config = GAConfig(
+                        population_size=args.ga_population,
+                        generations=args.ga_generations,
+                        mutation_prob=args.ga_mutation,
+                        min_features=min(args.ga_min_features, len(candidate_features)),
+                        max_features=len(candidate_features),
+                        random_state=random_state,
+                    )
+
+                    selector = GeneticFeatureSelector(
+                        estimator=estimator,
+                        config=ga_config,
+                        verbose=not args.ga_quiet,
+                        fitness_function=fitness_fn,
+                    )
 
                 selector.fit(data["X_train_res"][candidate_features], data["y_train_res"])
                 selected_features = selector.get_feature_names()
@@ -477,6 +504,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
                         "selected_features": len(selected_features),
                         "best_score": ga_score,
                         "redundancy_penalty": redundancy_penalty,
+                        "enhanced": args.use_enhanced_ga,
                     },
                 )
 
@@ -820,6 +848,36 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--ga-min-features", type=int, default=6, help="Minimum number of active features enforced in GA individuals.")
     parser.add_argument("--ga-cv-splits", type=int, default=5, help="Number of CV folds inside GA fitness evaluation.")
     parser.add_argument("--ga-quiet", action="store_true", help="Suppress per-generation GA logs.")
+    parser.add_argument(
+        "--use-enhanced-ga",
+        action="store_true",
+        help="Use enhanced GA with advanced techniques (heuristic init, adaptive mutation, local search, etc.)",
+    )
+    parser.add_argument(
+        "--ga-crossover-type",
+        type=str,
+        default="uniform",
+        choices=["single", "two_point", "uniform"],
+        help="Crossover strategy for enhanced GA (default: uniform).",
+    )
+    parser.add_argument(
+        "--ga-local-search",
+        action="store_true",
+        default=True,
+        help="Enable local search (hill climbing) in enhanced GA (default: True).",
+    )
+    parser.add_argument(
+        "--ga-early-stopping",
+        type=int,
+        default=15,
+        help="Early stopping patience (generations without improvement) for enhanced GA (0 to disable).",
+    )
+    parser.add_argument(
+        "--ga-heuristic-init",
+        type=float,
+        default=0.3,
+        help="Ratio of population initialized using feature importance in enhanced GA (0.0 to 1.0).",
+    )
     parser.add_argument("--no-smote", action="store_true", help="Disable SMOTE oversampling.")
     parser.add_argument("--enable-undersampling", action="store_true", help="Enable random undersampling before SMOTE.")
     parser.add_argument("--undersample-ratio", type=float, default=None, help="Majority/minority ratio for undersampling (if enabled).")

@@ -32,6 +32,10 @@ from Module import (
     construct_ensemble_features,
     load_and_preprocess,
 )
+from Module.genetic_algorithm_enhanced import (
+    EnhancedGAConfig,
+    EnhancedGeneticFeatureSelector,
+)
 from utils.feature_selection_utils import (
     build_redundancy_penalty_matrix,
     compute_mutual_information_scores,
@@ -268,12 +272,25 @@ def run_ga_preparation(args: argparse.Namespace) -> None:
         "vif": args.penalty_weight_vif,
     }
     
-    ga_config = GAConfig(
-        population_size=args.ga_population,
-        generations=args.ga_generations,
-        mutation_prob=args.ga_mutation,
-        random_state=random_state,
-    )
+    # Use enhanced GA if enabled
+    if args.use_enhanced_ga:
+        ga_config = EnhancedGAConfig(
+            population_size=args.ga_population,
+            generations=args.ga_generations,
+            mutation_prob=args.ga_mutation,
+            random_state=random_state,
+            crossover_type=args.ga_crossover_type,
+            use_local_search=args.ga_local_search,
+            early_stopping_patience=args.ga_early_stopping,
+            heuristic_init_ratio=args.ga_heuristic_init,
+        )
+    else:
+        ga_config = GAConfig(
+            population_size=args.ga_population,
+            generations=args.ga_generations,
+            mutation_prob=args.ga_mutation,
+            random_state=random_state,
+        )
     
     # Compute cache key
     cache_key = compute_cache_key(
@@ -407,15 +424,27 @@ def run_ga_preparation(args: argparse.Namespace) -> None:
         random_state=random_state,
     )
     
-    ga_config.min_features = min(args.ga_min_features, len(candidate_features))
-    ga_config.max_features = len(candidate_features)
-    
-    selector = GeneticFeatureSelector(
-        estimator=estimator,
-        config=ga_config,
-        verbose=not args.ga_quiet,
-        fitness_function=fitness_fn,
-    )
+    if args.use_enhanced_ga:
+        ga_config.min_features = min(args.ga_min_features, len(candidate_features))
+        ga_config.max_features = len(candidate_features)
+        
+        selector = EnhancedGeneticFeatureSelector(
+            estimator=estimator,
+            config=ga_config,
+            verbose=not args.ga_quiet,
+            fitness_function=fitness_fn,
+            feature_importance=ensemble_scores,
+        )
+    else:
+        ga_config.min_features = min(args.ga_min_features, len(candidate_features))
+        ga_config.max_features = len(candidate_features)
+        
+        selector = GeneticFeatureSelector(
+            estimator=estimator,
+            config=ga_config,
+            verbose=not args.ga_quiet,
+            fitness_function=fitness_fn,
+        )
     
     selector.fit(data["X_train_res"][candidate_features], data["y_train_res"])
     selected_features = selector.get_feature_names()
@@ -495,6 +524,38 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ga-min-features", type=int, default=3, help="Minimum features in GA")
     parser.add_argument("--ga-quiet", action="store_true", help="Suppress GA progress output")
     parser.add_argument("--ga-cv-splits", type=int, default=5, help="Cross-validation splits for GA")
+    
+    # Enhanced GA arguments
+    parser.add_argument(
+        "--use-enhanced-ga",
+        action="store_true",
+        help="Use enhanced GA with advanced techniques (heuristic init, adaptive mutation, local search, etc.)",
+    )
+    parser.add_argument(
+        "--ga-crossover-type",
+        type=str,
+        default="uniform",
+        choices=["single", "two_point", "uniform"],
+        help="Crossover strategy for enhanced GA (default: uniform).",
+    )
+    parser.add_argument(
+        "--ga-local-search",
+        action="store_true",
+        default=True,
+        help="Enable local search (hill climbing) in enhanced GA (default: True).",
+    )
+    parser.add_argument(
+        "--ga-early-stopping",
+        type=int,
+        default=15,
+        help="Early stopping patience (generations without improvement) for enhanced GA (0 to disable).",
+    )
+    parser.add_argument(
+        "--ga-heuristic-init",
+        type=float,
+        default=0.3,
+        help="Ratio of population initialized using feature importance in enhanced GA (0.0 to 1.0).",
+    )
     
     # Penalty arguments
     parser.add_argument("--lambda-penalty", type=float, default=0.05, help="Redundancy penalty weight")
