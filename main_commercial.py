@@ -23,6 +23,7 @@ from Module import (
     generate_tsne_snapshots,
     load_and_preprocess,
 )
+from utils.convergence_plots import plot_solver_convergence
 from Commercial_Solver.Numerical_optimization.gurobi_solver import solve_with_gurobi
 from Commercial_Solver.Metaheuristic_based.pymoo_ga import run_pymoo_ga
 
@@ -65,6 +66,11 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=2.0,
         help="Frame duration, in seconds, for the animated t-SNE GIF (default: 2.0).",
+    )
+    parser.add_argument(
+        "--plot-convergence",
+        action="store_true",
+        help="Generate convergence plots for solver optimization history (if available).",
     )
     return parser.parse_args()
 
@@ -260,20 +266,61 @@ def run() -> None:
             subset_size=len(selected_columns),
         )
 
+        # Prepare solver details with history if available
+        final_solver_details = {
+            "selected_features": selected_columns,
+            "cost_beta": args.cost_beta,
+            **solver_details,
+        }
+        
+        # For commercial solvers, we don't have loss history tracking yet
+        # But we can add it if snapshots are available
+        solver_history = None
+        if args.tsne_snapshots and snapshots:
+            # Extract loss from snapshots if available
+            loss_history = []
+            for snap in snapshots:
+                if "loss" in snap:
+                    loss_history.append(snap["loss"])
+            if loss_history:
+                solver_history = {"loss": loss_history}
+                final_solver_details["history"] = solver_history
+        
         tracker.save_solver_results(
             backend,
             weights,
             bias,
             threshold=val_threshold,
             val_score=val_score,
-            solver_details={
-                "selected_features": selected_columns,
-                "cost_beta": args.cost_beta,
-                **solver_details,
-            },
+            solver_details=final_solver_details,
             model=sklearn_model,
             snapshots=snapshots if (args.tsne_snapshots and snapshots) else None,
         )
+        
+        # Plot solver convergence if requested and history is available
+        if args.plot_convergence and solver_history and "loss" in solver_history:
+            try:
+                solver_plot_path = plot_solver_convergence(
+                    solver_history,
+                    tracker.result_dir / "solver" / "convergence.png",
+                    title="Commercial Solver Convergence",
+                    method=backend,
+                )
+                tracker.log_event(
+                    "solver",
+                    "Generated convergence plot",
+                    {"plot_path": str(solver_plot_path.relative_to(tracker.result_dir))},
+                )
+                print(f"[Solver] Convergence plot saved to: {solver_plot_path}")
+            except Exception as e:
+                import logging
+                tracker.log_event(
+                    "solver",
+                    "Failed to generate convergence plot",
+                    {"error": str(e)},
+                    level=logging.WARNING,
+                )
+                print(f"[Solver] Warning: Failed to generate convergence plot: {e}")
         tracker.save_evaluation(evaluation)
         tracker.log_event(
             "evaluation",
