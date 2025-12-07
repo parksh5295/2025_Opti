@@ -101,6 +101,105 @@ def create_main_parser() -> argparse.ArgumentParser:
         default=0.3,
         help="Ratio of population initialized using feature importance in enhanced GA (0.0 to 1.0).",
     )
+    parser.add_argument(
+        "--use-advanced-ga",
+        action="store_true",
+        help="Use advanced GA with self-adaptation, niching, surrogate models, and adaptive population (requires more computation).",
+    )
+    parser.add_argument(
+        "--ga-fitness-sharing",
+        action="store_true",
+        default=True,
+        help="Enable fitness sharing for niching in advanced GA (default: True).",
+    )
+    parser.add_argument(
+        "--ga-fitness-sharing-sigma",
+        type=float,
+        default=0.3,
+        help="Fitness sharing radius (distance threshold) in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-surrogate",
+        action="store_true",
+        help="Enable surrogate model for fitness approximation in advanced GA (speeds up evaluation).",
+    )
+    parser.add_argument(
+        "--ga-surrogate-type",
+        type=str,
+        default="random_forest",
+        choices=["random_forest"],
+        help="Type of surrogate model for advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-adaptive-population",
+        action="store_true",
+        default=True,
+        help="Enable adaptive population size in advanced GA (default: True).",
+    )
+    parser.add_argument(
+        "--ga-local-search-type",
+        type=str,
+        default="simulated_annealing",
+        choices=["hill_climbing", "simulated_annealing"],
+        help="Type of local search in advanced GA (default: simulated_annealing).",
+    )
+    parser.add_argument(
+        "--ga-island-model",
+        action="store_true",
+        help="Enable island model (distributed GA with migration) in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-num-islands",
+        type=int,
+        default=4,
+        help="Number of islands (sub-populations) for island model in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-migration-interval",
+        type=int,
+        default=10,
+        help="Migration interval (generations) for island model in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-migration-rate",
+        type=float,
+        default=0.1,
+        help="Fraction of population to migrate between islands in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-multi-objective",
+        action="store_true",
+        help="Enable multi-objective GA (NSGA-II style) in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-replacement-strategy",
+        type=str,
+        default="generational",
+        choices=["generational", "mu_plus_lambda", "steady_state"],
+        help="Replacement strategy for advanced GA (default: generational).",
+    )
+    parser.add_argument(
+        "--ga-mu-plus-lambda-mu",
+        type=int,
+        default=None,
+        help="μ (mu) parameter for μ+λ selection strategy in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-tabu-search",
+        action="store_true",
+        help="Enable Tabu Search for local search in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-tabu-tenure",
+        type=int,
+        default=5,
+        help="Tabu list size (tenure) for Tabu Search in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-transfer-learning",
+        action="store_true",
+        help="Enable transfer learning: initialize from previous best solutions in advanced GA.",
+    )
     parser.add_argument("--no-smote", action="store_true", help="Disable SMOTE oversampling.")
     parser.add_argument("--enable-undersampling", action="store_true", help="Enable random undersampling before SMOTE.")
     parser.add_argument("--undersample-ratio", type=float, default=None, help="Majority/minority ratio for undersampling (if enabled).")

@@ -36,6 +36,10 @@ from Module.genetic_algorithm_enhanced import (
     EnhancedGAConfig,
     EnhancedGeneticFeatureSelector,
 )
+from Module.genetic_algorithm_advanced import (
+    AdvancedGAConfig,
+    AdvancedGeneticFeatureSelector,
+)
 from utils.feature_selection_utils import (
     build_redundancy_penalty_matrix,
     compute_mutual_information_scores,
@@ -272,8 +276,27 @@ def run_ga_preparation(args: argparse.Namespace) -> None:
         "vif": args.penalty_weight_vif,
     }
     
+    # Use advanced GA if enabled (highest level)
+    if args.use_advanced_ga:
+        ga_config = AdvancedGAConfig(
+            population_size=args.ga_population,
+            generations=args.ga_generations,
+            min_mutation_prob=args.ga_mutation * 0.5,
+            max_mutation_prob=args.ga_mutation * 2.0,
+            random_state=random_state,
+            crossover_type=args.ga_crossover_type,
+            use_local_search=args.ga_local_search,
+            local_search_type=args.ga_local_search_type,
+            use_fitness_sharing=args.ga_fitness_sharing,
+            fitness_sharing_sigma=args.ga_fitness_sharing_sigma,
+            use_surrogate=args.ga_surrogate,
+            surrogate_type=args.ga_surrogate_type,
+            adaptive_population=args.ga_adaptive_population,
+            early_stopping_patience=args.ga_early_stopping,
+            heuristic_init_ratio=args.ga_heuristic_init,
+        )
     # Use enhanced GA if enabled
-    if args.use_enhanced_ga:
+    elif args.use_enhanced_ga:
         ga_config = EnhancedGAConfig(
             population_size=args.ga_population,
             generations=args.ga_generations,
@@ -424,7 +447,18 @@ def run_ga_preparation(args: argparse.Namespace) -> None:
         random_state=random_state,
     )
     
-    if args.use_enhanced_ga:
+    if args.use_advanced_ga:
+        ga_config.min_features = min(args.ga_min_features, len(candidate_features))
+        ga_config.max_features = len(candidate_features)
+        
+        selector = AdvancedGeneticFeatureSelector(
+            estimator=estimator,
+            config=ga_config,
+            verbose=not args.ga_quiet,
+            fitness_function=fitness_fn,
+            feature_importance=ensemble_scores,
+        )
+    elif args.use_enhanced_ga:
         ga_config.min_features = min(args.ga_min_features, len(candidate_features))
         ga_config.max_features = len(candidate_features)
         
@@ -555,6 +589,50 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.3,
         help="Ratio of population initialized using feature importance in enhanced GA (0.0 to 1.0).",
+    )
+    
+    # Advanced GA arguments
+    parser.add_argument(
+        "--use-advanced-ga",
+        action="store_true",
+        help="Use advanced GA with self-adaptation, niching, surrogate models, and adaptive population.",
+    )
+    parser.add_argument(
+        "--ga-fitness-sharing",
+        action="store_true",
+        default=True,
+        help="Enable fitness sharing for niching in advanced GA (default: True).",
+    )
+    parser.add_argument(
+        "--ga-fitness-sharing-sigma",
+        type=float,
+        default=0.3,
+        help="Fitness sharing radius (distance threshold) in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-surrogate",
+        action="store_true",
+        help="Enable surrogate model for fitness approximation in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-surrogate-type",
+        type=str,
+        default="random_forest",
+        choices=["random_forest"],
+        help="Type of surrogate model for advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-adaptive-population",
+        action="store_true",
+        default=True,
+        help="Enable adaptive population size in advanced GA (default: True).",
+    )
+    parser.add_argument(
+        "--ga-local-search-type",
+        type=str,
+        default="simulated_annealing",
+        choices=["hill_climbing", "simulated_annealing"],
+        help="Type of local search in advanced GA (default: simulated_annealing).",
     )
     
     # Penalty arguments
