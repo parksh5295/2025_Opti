@@ -281,19 +281,48 @@ def run_ga_preparation(args: argparse.Namespace) -> None:
         ga_config = AdvancedGAConfig(
             population_size=args.ga_population,
             generations=args.ga_generations,
+            min_crossover_prob=getattr(args, 'ga_min_crossover_prob', 0.5),
+            max_crossover_prob=getattr(args, 'ga_max_crossover_prob', 0.95),
             min_mutation_prob=args.ga_mutation * 0.5,
             max_mutation_prob=args.ga_mutation * 2.0,
+            mutation_sigma_init=getattr(args, 'ga_mutation_sigma_init', 0.1),
+            mutation_sigma_min=getattr(args, 'ga_mutation_sigma_min', 0.01),
+            mutation_sigma_max=getattr(args, 'ga_mutation_sigma_max', 1.0),
             random_state=random_state,
             crossover_type=args.ga_crossover_type,
             use_local_search=args.ga_local_search,
             local_search_type=args.ga_local_search_type,
+            sa_initial_temp=getattr(args, 'sa_initial_temp', 100.0),
+            sa_cooling_rate=getattr(args, 'sa_cooling_rate', 0.95),
             use_fitness_sharing=args.ga_fitness_sharing,
             fitness_sharing_sigma=args.ga_fitness_sharing_sigma,
+            fitness_sharing_alpha=getattr(args, 'ga_fitness_sharing_alpha', 1.0),
             use_surrogate=args.ga_surrogate,
             surrogate_type=args.ga_surrogate_type,
+            surrogate_update_interval=getattr(args, 'ga_surrogate_update_interval', 5),
+            surrogate_sample_size=getattr(args, 'ga_surrogate_sample_size', 100),
             adaptive_population=args.ga_adaptive_population,
+            population_alpha=getattr(args, 'ga_population_alpha', 0.5),
+            population_beta=getattr(args, 'ga_population_beta', 1.5),
             early_stopping_patience=args.ga_early_stopping,
             heuristic_init_ratio=args.ga_heuristic_init,
+            use_island_model=getattr(args, 'ga_island_model', False),
+            num_islands=getattr(args, 'ga_num_islands', 4),
+            migration_interval=getattr(args, 'ga_migration_interval', 10),
+            migration_rate=getattr(args, 'ga_migration_rate', 0.1),
+            use_multi_objective=getattr(args, 'ga_multi_objective', False),
+            multi_objective_weights=(
+                {"fitness": args.ga_multi_objective_weights[0], "feature_count": args.ga_multi_objective_weights[1]}
+                if getattr(args, 'ga_multi_objective_weights', None) is not None
+                else None
+            ),
+            replacement_strategy=getattr(args, 'ga_replacement_strategy', 'generational'),
+            mu_plus_lambda_mu=getattr(args, 'ga_mu_plus_lambda_mu', None),
+            steady_state_replace_worst=True,  # Always replace worst in steady-state
+            use_tabu_search=getattr(args, 'ga_tabu_search', False),
+            tabu_tenure=getattr(args, 'ga_tabu_tenure', 5),
+            use_transfer_learning=args.ga_transfer_learning,
+            transfer_solutions=None,  # Will be set later after candidate_features is defined
         )
     # Use enhanced GA if enabled
     elif args.use_enhanced_ga:
@@ -450,6 +479,16 @@ def run_ga_preparation(args: argparse.Namespace) -> None:
     if args.use_advanced_ga:
         ga_config.min_features = min(args.ga_min_features, len(candidate_features))
         ga_config.max_features = len(candidate_features)
+        
+        # Transfer learning: try to load previous best solutions (after candidate_features is defined)
+        if args.ga_transfer_learning:
+            from utils.transfer_learning import load_previous_best_solutions
+            transfer_solutions = load_previous_best_solutions(
+                args.data_path, "without_hessian", candidate_features
+            )
+            if transfer_solutions:
+                ga_config.transfer_solutions = transfer_solutions
+                ga_config.use_transfer_learning = True
         
         selector = AdvancedGeneticFeatureSelector(
             estimator=estimator,
@@ -633,6 +672,166 @@ def parse_args() -> argparse.Namespace:
         default="simulated_annealing",
         choices=["hill_climbing", "simulated_annealing"],
         help="Type of local search in advanced GA (default: simulated_annealing).",
+    )
+    parser.add_argument(
+        "--ga-island-model",
+        action="store_true",
+        help="Enable island model (distributed GA with migration) in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-num-islands",
+        type=int,
+        default=4,
+        help="Number of islands (sub-populations) for island model in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-migration-interval",
+        type=int,
+        default=10,
+        help="Migration interval (generations) for island model in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-migration-rate",
+        type=float,
+        default=0.1,
+        help="Fraction of population to migrate between islands in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-multi-objective",
+        action="store_true",
+        help="Enable multi-objective GA (NSGA-II style) in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-multi-objective-weights",
+        type=float,
+        nargs=2,
+        default=None,
+        help="Weights for multi-objective GA: [fitness_weight, feature_count_weight]. If not provided, uses default weights.",
+    )
+    parser.add_argument(
+        "--ga-replacement-strategy",
+        type=str,
+        default="generational",
+        choices=["generational", "mu_plus_lambda", "steady_state"],
+        help="Replacement strategy for advanced GA (default: generational).",
+    )
+    parser.add_argument(
+        "--ga-mu-plus-lambda-mu",
+        type=int,
+        default=None,
+        help="μ (mu) parameter for μ+λ selection strategy in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-steady-state-replace-worst",
+        type=int,
+        default=1,
+        help="Number of worst individuals to replace in steady-state GA.",
+    )
+    parser.add_argument(
+        "--ga-tabu-search",
+        action="store_true",
+        help="Enable Tabu Search for local search in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-tabu-tenure",
+        type=int,
+        default=5,
+        help="Tabu list size (tenure) for Tabu Search in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-transfer-learning",
+        action="store_true",
+        help="Enable transfer learning: initialize from previous best solutions in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-transfer-solutions",
+        type=int,
+        default=5,
+        help="Number of previous best solutions to use for transfer learning in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-fitness-sharing-alpha",
+        type=float,
+        default=1.0,
+        help="Fitness sharing scaling factor (alpha) in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-surrogate-update-interval",
+        type=int,
+        default=5,
+        help="Interval (generations) for updating surrogate model in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-surrogate-sample-size",
+        type=int,
+        default=100,
+        help="Sample size for training surrogate model in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-population-alpha",
+        type=float,
+        default=0.5,
+        help="Alpha parameter for adaptive population size in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-population-beta",
+        type=float,
+        default=1.5,
+        help="Beta parameter for adaptive population size in advanced GA.",
+    )
+    parser.add_argument(
+        "--ga-min-crossover-prob",
+        type=float,
+        default=0.5,
+        help="Minimum crossover probability for self-adaptive GA.",
+    )
+    parser.add_argument(
+        "--ga-max-crossover-prob",
+        type=float,
+        default=0.95,
+        help="Maximum crossover probability for self-adaptive GA.",
+    )
+    parser.add_argument(
+        "--ga-min-mutation-prob",
+        type=float,
+        default=0.01,
+        help="Minimum mutation probability for self-adaptive GA.",
+    )
+    parser.add_argument(
+        "--ga-max-mutation-prob",
+        type=float,
+        default=0.2,
+        help="Maximum mutation probability for self-adaptive GA.",
+    )
+    parser.add_argument(
+        "--ga-mutation-sigma-init",
+        type=float,
+        default=0.1,
+        help="Initial mutation distribution sigma for self-adaptive GA.",
+    )
+    parser.add_argument(
+        "--ga-mutation-sigma-min",
+        type=float,
+        default=0.01,
+        help="Minimum mutation distribution sigma for self-adaptive GA.",
+    )
+    parser.add_argument(
+        "--ga-mutation-sigma-max",
+        type=float,
+        default=1.0,
+        help="Maximum mutation distribution sigma for self-adaptive GA.",
+    )
+    parser.add_argument(
+        "--sa-initial-temp",
+        type=float,
+        default=100.0,
+        help="Initial temperature for simulated annealing local search in advanced GA.",
+    )
+    parser.add_argument(
+        "--sa-cooling-rate",
+        type=float,
+        default=0.95,
+        help="Cooling rate for simulated annealing local search in advanced GA.",
     )
     
     # Penalty arguments
