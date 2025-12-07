@@ -553,7 +553,12 @@ def parse_args() -> argparse.Namespace:
     )
     
     # Data arguments
-    parser.add_argument("--data-path", type=Path, required=True, help="CSV dataset path")
+    parser.add_argument(
+        "--data-path",
+        type=Path,
+        default=Path("../Data/creditcard/creditcard.csv"),
+        help="CSV dataset path (default: ../Data/creditcard/creditcard.csv)",
+    )
     parser.add_argument("--target-column", type=str, default="Class", help="Target column name")
     
     # Preprocessing arguments
