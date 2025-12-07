@@ -94,8 +94,17 @@ def compute_cache_key(
         "ga": {
             "population_size": ga_config.population_size,
             "generations": ga_config.generations,
-            "mutation_prob": ga_config.mutation_prob,
-            "crossover_prob": ga_config.crossover_prob,
+            # Handle different GA config types
+            "mutation_prob": (
+                getattr(ga_config, "mutation_prob", None)
+                if hasattr(ga_config, "mutation_prob")
+                else (getattr(ga_config, "min_mutation_prob", None), getattr(ga_config, "max_mutation_prob", None))
+            ),
+            "crossover_prob": (
+                getattr(ga_config, "crossover_prob", None)
+                if hasattr(ga_config, "crossover_prob")
+                else (getattr(ga_config, "min_crossover_prob", None), getattr(ga_config, "max_crossover_prob", None))
+            ),
             "elitism": ga_config.elitism,
             "tournament_size": ga_config.tournament_size,
             "min_features": ga_config.min_features,
@@ -105,6 +114,18 @@ def compute_cache_key(
             "alpha_size": alpha_size,
             "cost_beta": cost_beta,
             "ga_cv_splits": ga_cv_splits,
+            # Advanced GA specific attributes
+            "use_advanced_ga": hasattr(ga_config, "min_mutation_prob"),
+            "use_enhanced_ga": hasattr(ga_config, "mutation_prob") and hasattr(ga_config, "adaptive_mutation"),
+            "use_island_model": getattr(ga_config, "use_island_model", False),
+            "use_multi_objective": getattr(ga_config, "use_multi_objective", False),
+            "replacement_strategy": getattr(ga_config, "replacement_strategy", "generational"),
+            "use_fitness_sharing": getattr(ga_config, "use_fitness_sharing", False),
+            "use_surrogate": getattr(ga_config, "use_surrogate", False),
+            "adaptive_population": getattr(ga_config, "adaptive_population", False),
+            "local_search_type": getattr(ga_config, "local_search_type", None),
+            "use_tabu_search": getattr(ga_config, "use_tabu_search", False),
+            "use_transfer_learning": getattr(ga_config, "use_transfer_learning", False),
         },
     }
     config_str = json.dumps(config_dict, sort_keys=True, ensure_ascii=False)
