@@ -201,9 +201,70 @@ def run_ga_stage(
     -------
     Tuple of (selected_features, ga_score, redundancy_penalty, ga_history, diversity_history).
     """
-    # Try cache first
+    # Try cache first - use the same config type that will be used for GA
     ga_cache_result = None
     try:
+        # Build the same config that will be used for GA execution
+        if args.use_advanced_ga:
+            cache_ga_config = AdvancedGAConfig(
+                population_size=args.ga_population,
+                generations=args.ga_generations,
+                min_crossover_prob=getattr(args, 'ga_min_crossover_prob', 0.5),
+                max_crossover_prob=getattr(args, 'ga_max_crossover_prob', 0.95),
+                min_mutation_prob=args.ga_mutation * 0.5,
+                max_mutation_prob=args.ga_mutation * 2.0,
+                mutation_sigma_init=getattr(args, 'ga_mutation_sigma_init', 0.1),
+                mutation_sigma_min=getattr(args, 'ga_mutation_sigma_min', 0.01),
+                mutation_sigma_max=getattr(args, 'ga_mutation_sigma_max', 1.0),
+                random_state=random_state,
+                crossover_type=args.ga_crossover_type,
+                use_local_search=args.ga_local_search,
+                local_search_type=args.ga_local_search_type,
+                sa_initial_temp=getattr(args, 'sa_initial_temp', 100.0),
+                sa_cooling_rate=getattr(args, 'sa_cooling_rate', 0.95),
+                use_fitness_sharing=args.ga_fitness_sharing,
+                fitness_sharing_sigma=args.ga_fitness_sharing_sigma,
+                fitness_sharing_alpha=getattr(args, 'ga_fitness_sharing_alpha', 1.0),
+                use_surrogate=args.ga_surrogate,
+                surrogate_type=args.ga_surrogate_type,
+                surrogate_update_interval=getattr(args, 'ga_surrogate_update_interval', 5),
+                surrogate_sample_size=getattr(args, 'ga_surrogate_sample_size', 100),
+                adaptive_population=args.ga_adaptive_population,
+                population_alpha=getattr(args, 'ga_population_alpha', 0.5),
+                population_beta=getattr(args, 'ga_population_beta', 1.5),
+                early_stopping_patience=args.ga_early_stopping,
+                heuristic_init_ratio=args.ga_heuristic_init,
+                use_island_model=getattr(args, 'ga_island_model', False),
+                num_islands=getattr(args, 'ga_num_islands', 4),
+                migration_interval=getattr(args, 'ga_migration_interval', 10),
+                migration_rate=getattr(args, 'ga_migration_rate', 0.1),
+                use_multi_objective=getattr(args, 'ga_multi_objective', False),
+                replacement_strategy=getattr(args, 'ga_replacement_strategy', 'generational'),
+                mu_plus_lambda_mu=getattr(args, 'ga_mu_plus_lambda_mu', None),
+                steady_state_replace_worst=True,
+                use_tabu_search=getattr(args, 'ga_tabu_search', False),
+                tabu_tenure=getattr(args, 'ga_tabu_tenure', 5),
+                use_transfer_learning=args.ga_transfer_learning,
+            )
+        elif args.use_enhanced_ga:
+            cache_ga_config = EnhancedGAConfig(
+                population_size=args.ga_population,
+                generations=args.ga_generations,
+                mutation_prob=args.ga_mutation,
+                random_state=random_state,
+                crossover_type=args.ga_crossover_type,
+                use_local_search=args.ga_local_search,
+                early_stopping_patience=args.ga_early_stopping,
+                heuristic_init_ratio=args.ga_heuristic_init,
+            )
+        else:
+            cache_ga_config = GAConfig(
+                population_size=args.ga_population,
+                generations=args.ga_generations,
+                mutation_prob=args.ga_mutation,
+                random_state=random_state,
+            )
+        
         ga_cache_result = load_ga_from_cache(
             tracker,
             args.data_path,
@@ -218,12 +279,7 @@ def run_ga_stage(
             },
             args.redundancy_budget,
             args.min_candidate_features,
-            GAConfig(
-                population_size=args.ga_population,
-                generations=args.ga_generations,
-                mutation_prob=args.ga_mutation,
-                random_state=random_state,
-            ),
+            cache_ga_config,
             args.lambda_penalty,
             args.alpha_size,
             args.cost_beta,
