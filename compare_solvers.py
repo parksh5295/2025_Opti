@@ -36,8 +36,8 @@ def main() -> None:
     parser.add_argument(
         "--data-path",
         type=Path,
-        required=True,
-        help="Path to the data directory (parent of Result/ and log/).",
+        default=Path("../Data"),
+        help="Path to the data directory (parent of Result/ and log/). Default: ../Data",
     )
     parser.add_argument(
         "--run1-method",
@@ -103,13 +103,21 @@ def main() -> None:
     
     args = parser.parse_args()
     
+    # Normalize data_path: if it's a CSV file, use its parent directory
+    data_path = args.data_path
+    if data_path.suffix == ".csv":
+        data_path = data_path.parent
+        print(f"[Comparison] Detected CSV file path, using parent directory: {data_path}")
+    # Resolve relative path
+    data_path = data_path.resolve()
+    
     # Load run 1
     if args.run1_name:
         print(f"[Comparison] Loading Run 1: {args.run1_method} / {args.run1_name}")
     else:
         print(f"[Comparison] Loading Run 1: {args.run1_method} (auto-selecting latest completed run)")
     results1 = load_run_results(
-        args.data_path, 
+        data_path, 
         args.run1_method, 
         args.run1_name, 
         auto_run=args.auto_run,
@@ -122,7 +130,7 @@ def main() -> None:
     else:
         print(f"[Comparison] Loading Run 2: {args.run2_method} (auto-selecting latest completed run)")
     results2 = load_run_results(
-        args.data_path, 
+        data_path, 
         args.run2_method, 
         args.run2_name, 
         auto_run=args.auto_run,
@@ -148,7 +156,7 @@ def main() -> None:
             ga_history2 = None
             try:
                 tracker1 = ExperimentTracker(
-                    data_path=args.data_path,
+                    data_path=data_path,
                     method_label=results1["method_label"],
                     run_name=results1["run_name"],
                 )
@@ -160,7 +168,7 @@ def main() -> None:
             
             try:
                 tracker2 = ExperimentTracker(
-                    data_path=args.data_path,
+                    data_path=data_path,
                     method_label=results2["method_label"],
                     run_name=results2["run_name"],
                 )
@@ -178,7 +186,7 @@ def main() -> None:
             if args.output:
                 plot_dir = args.output.parent / f"{args.output.stem}_plots"
             else:
-                data_root = ExperimentTracker.compute_data_root(args.data_path)
+                data_root = ExperimentTracker.compute_data_root(data_path)
                 plot_dir = data_root / "comparison_plots" / f"{results1['run_name']}_vs_{results2['run_name']}"
             plot_dir.mkdir(parents=True, exist_ok=True)
             
