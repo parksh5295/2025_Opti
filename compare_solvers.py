@@ -103,26 +103,27 @@ def main() -> None:
     
     args = parser.parse_args()
     
-    # Normalize data_path: if it's a CSV file, use its parent directory
-    # compare_solvers.py uses data directory for ExperimentTracker, but auto-run needs CSV path
+    # Normalize data_path: ExperimentTracker expects CSV file path (like main.py and main_commercial.py)
+    # compare_solvers.py uses CSV path for ExperimentTracker, but auto-run also needs CSV path
     input_path = args.data_path.resolve()
     if input_path.suffix == ".csv":
-        # CSV file provided: use parent directory for tracker, but keep CSV path for auto-run
-        data_path = input_path.parent
+        # CSV file provided: use it directly for tracker (ExperimentTracker.compute_data_root will handle it)
+        data_path = input_path  # Pass CSV path directly, like main.py does
         csv_path_for_auto_run = input_path
         print(f"[Comparison] Detected CSV file path: {input_path}")
-        print(f"[Comparison] Using parent directory for tracker: {data_path}")
+        print(f"[Comparison] Using CSV path for tracker (data root will be computed automatically)")
     else:
-        # Directory provided: construct CSV path for auto-run
-        data_path = input_path
-        csv_path_for_auto_run = data_path / "creditcard" / "creditcard.csv"
+        # Directory provided: construct CSV path for auto-run and tracker
+        csv_path_for_auto_run = input_path / "creditcard" / "creditcard.csv"
         if not csv_path_for_auto_run.exists():
-            csv_path_for_auto_run = data_path / "creditcard.csv"
-        print(f"[Comparison] Using data directory: {data_path}")
-        print(f"[Comparison] CSV path for auto-run: {csv_path_for_auto_run}")
+            csv_path_for_auto_run = input_path / "creditcard.csv"
+        data_path = csv_path_for_auto_run  # Use CSV path for tracker
+        print(f"[Comparison] Using data directory: {input_path}")
+        print(f"[Comparison] CSV path for tracker and auto-run: {csv_path_for_auto_run}")
     
     # Resolve relative path
     data_path = data_path.resolve()
+    csv_path_for_auto_run = csv_path_for_auto_run.resolve() if csv_path_for_auto_run.exists() else None
     
     # Pass csv_path to load_run_results for auto-run
     # Note: csv_path_for_auto_run is only used when auto-running pipelines
