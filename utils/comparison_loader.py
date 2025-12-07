@@ -27,13 +27,23 @@ def load_run_results(
     
     Parameters
     ----------
-    data_path: Path to data directory (for ExperimentTracker)
+    data_path: Path to data directory or CSV file (for ExperimentTracker)
     method_label: Method label (e.g., 'without_hessian', 'commercial_gurobi')
     run_name: Optional run name. If None, finds latest completed run.
     auto_run: Whether to automatically run pipeline if no completed run found
     extra_args: Optional additional arguments for auto-run
     csv_path: Optional CSV file path for auto-run. If None, will be constructed from data_path.
     """
+    # Determine CSV path if not provided and data_path is not a CSV file
+    if csv_path is None and data_path.suffix != ".csv":
+        # data_path is a directory, construct CSV path
+        csv_path = data_path / "creditcard" / "creditcard.csv"
+        if not csv_path.exists():
+            csv_path = data_path / "creditcard.csv"
+    elif csv_path is None and data_path.suffix == ".csv":
+        # data_path is already a CSV file
+        csv_path = data_path
+    
     # If run_name is not specified, find the latest completed run
     actual_method_label = method_label  # Track the actual method_label used
     if run_name is None:
@@ -53,8 +63,20 @@ def load_run_results(
             print(f"[Comparison] Auto-selected latest completed run: {run_name} (method: {method_label})")
     
     # Use actual_method_label for tracker (in case alias was used)
+    # Note: data_path might be a CSV file path (from compare_solvers.py) or a directory
+    # ExperimentTracker expects CSV file path (like main.py and main_commercial.py)
+    tracker_data_path = data_path
+    if csv_path is not None and csv_path.suffix == ".csv":
+        # If csv_path is provided and is a CSV file, use it for tracker
+        tracker_data_path = csv_path
+    elif data_path.suffix != ".csv":
+        # If data_path is not a CSV file, construct CSV path for tracker
+        tracker_data_path = data_path / "creditcard" / "creditcard.csv"
+        if not tracker_data_path.exists():
+            tracker_data_path = data_path / "creditcard.csv"
+    
     tracker = ExperimentTracker(
-        data_path=data_path,
+        data_path=tracker_data_path,
         method_label=actual_method_label,
         run_name=run_name,
     )
@@ -97,7 +119,7 @@ def load_run_results(
                 # This should have been caught earlier, but double-check
                 if auto_run:
                     print(f"[Comparison] Solver stage still not completed. Re-running pipeline...")
-                    run_name, actual_method_label = _auto_run_pipeline(data_path, method_label, extra_args=extra_args, csv_path=None)
+                    run_name, actual_method_label = _auto_run_pipeline(data_path, method_label, extra_args=extra_args, csv_path=csv_path)
                     tracker = ExperimentTracker(
                         data_path=data_path,
                         method_label=actual_method_label,
@@ -177,7 +199,7 @@ def load_run_results(
                 print(f"[Comparison] Error details: {traceback.format_exc()}")
                 print(f"[Comparison] Attempting to re-run pipeline...")
                 try:
-                    run_name, actual_method_label = _auto_run_pipeline(data_path, method_label, extra_args=extra_args, csv_path=None)
+                    run_name, actual_method_label = _auto_run_pipeline(data_path, method_label, extra_args=extra_args, csv_path=csv_path)
                     # Update tracker with new run
                     tracker = ExperimentTracker(
                         data_path=data_path,
@@ -282,7 +304,7 @@ def load_run_results(
                 # This should have been caught earlier, but double-check
                 if auto_run and "error" not in results:
                     print(f"[Comparison] Evaluation stage still not completed. Re-running pipeline...")
-                    run_name, actual_method_label = _auto_run_pipeline(data_path, method_label, extra_args=extra_args, csv_path=None)
+                    run_name, actual_method_label = _auto_run_pipeline(data_path, method_label, extra_args=extra_args, csv_path=csv_path)
                     tracker = ExperimentTracker(
                         data_path=data_path,
                         method_label=actual_method_label,
@@ -308,7 +330,7 @@ def load_run_results(
                 print(f"[Comparison] Failed to load evaluation results for {method_label}/{run_name}: {e}")
                 print(f"[Comparison] Attempting to re-run pipeline...")
                 try:
-                    run_name, actual_method_label = _auto_run_pipeline(data_path, method_label, extra_args=extra_args, csv_path=None)
+                    run_name, actual_method_label = _auto_run_pipeline(data_path, method_label, extra_args=extra_args, csv_path=csv_path)
                     # Update tracker with new run
                     tracker = ExperimentTracker(
                         data_path=data_path,
@@ -357,10 +379,16 @@ def _auto_run_pipeline(data_path: Path, method_label: str, extra_args: Optional[
     is the method_label that was actually used to save the run.
     """
     # Determine CSV path if not provided
+    # Note: data_path might be a CSV file path (from compare_solvers.py) or a directory
     if csv_path is None:
-        csv_path = data_path / "creditcard" / "creditcard.csv"
-        if not csv_path.exists():
-            csv_path = data_path / "creditcard.csv"
+        # If data_path is already a CSV file, use it directly
+        if data_path.suffix == ".csv":
+            csv_path = data_path
+        else:
+            # Otherwise, construct from directory
+            csv_path = data_path / "creditcard" / "creditcard.csv"
+            if not csv_path.exists():
+                csv_path = data_path / "creditcard.csv"
     
     # Determine which script to run based on method_label
     actual_method_label = method_label  # Track the actual method_label used
