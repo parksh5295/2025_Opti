@@ -36,8 +36,8 @@ def main() -> None:
     parser.add_argument(
         "--data-path",
         type=Path,
-        default=Path("../Data"),
-        help="Path to the data directory (parent of Result/ and log/). Default: ../Data",
+        default=Path("../Data/creditcard/creditcard.csv"),
+        help="Path to the CSV file or data directory. Default: ../Data/creditcard/creditcard.csv",
     )
     parser.add_argument(
         "--run1-method",
@@ -104,12 +104,29 @@ def main() -> None:
     args = parser.parse_args()
     
     # Normalize data_path: if it's a CSV file, use its parent directory
-    data_path = args.data_path
-    if data_path.suffix == ".csv":
-        data_path = data_path.parent
-        print(f"[Comparison] Detected CSV file path, using parent directory: {data_path}")
+    # compare_solvers.py uses data directory for ExperimentTracker, but auto-run needs CSV path
+    input_path = args.data_path.resolve()
+    if input_path.suffix == ".csv":
+        # CSV file provided: use parent directory for tracker, but keep CSV path for auto-run
+        data_path = input_path.parent
+        csv_path_for_auto_run = input_path
+        print(f"[Comparison] Detected CSV file path: {input_path}")
+        print(f"[Comparison] Using parent directory for tracker: {data_path}")
+    else:
+        # Directory provided: construct CSV path for auto-run
+        data_path = input_path
+        csv_path_for_auto_run = data_path / "creditcard" / "creditcard.csv"
+        if not csv_path_for_auto_run.exists():
+            csv_path_for_auto_run = data_path / "creditcard.csv"
+        print(f"[Comparison] Using data directory: {data_path}")
+        print(f"[Comparison] CSV path for auto-run: {csv_path_for_auto_run}")
+    
     # Resolve relative path
     data_path = data_path.resolve()
+    
+    # Pass csv_path to load_run_results for auto-run
+    # Note: csv_path_for_auto_run is only used when auto-running pipelines
+    csv_path_for_auto_run = csv_path_for_auto_run.resolve() if csv_path_for_auto_run.exists() else None
     
     # Load run 1
     if args.run1_name:
@@ -122,6 +139,7 @@ def main() -> None:
         args.run1_name, 
         auto_run=args.auto_run,
         extra_args=args.run1_extra_args,
+        csv_path=csv_path_for_auto_run,
     )
     
     # Load run 2
@@ -135,6 +153,7 @@ def main() -> None:
         args.run2_name, 
         auto_run=args.auto_run,
         extra_args=args.run2_extra_args,
+        csv_path=csv_path_for_auto_run,
     )
     
     # Check for errors

@@ -18,11 +18,21 @@ def load_run_results(
     run_name: Optional[str] = None,
     auto_run: bool = False,
     extra_args: Optional[List[str]] = None,
+    csv_path: Optional[Path] = None,
 ) -> Dict[str, object]:
     """Load all results from a specific run.
     
     If run_name is None, automatically finds the latest completed run for the method_label.
     If no completed run exists and auto_run=True, automatically runs the pipeline.
+    
+    Parameters
+    ----------
+    data_path: Path to data directory (for ExperimentTracker)
+    method_label: Method label (e.g., 'without_hessian', 'commercial_gurobi')
+    run_name: Optional run name. If None, finds latest completed run.
+    auto_run: Whether to automatically run pipeline if no completed run found
+    extra_args: Optional additional arguments for auto-run
+    csv_path: Optional CSV file path for auto-run. If None, will be constructed from data_path.
     """
     # If run_name is not specified, find the latest completed run
     actual_method_label = method_label  # Track the actual method_label used
@@ -31,7 +41,7 @@ def load_run_results(
         if latest_state is None:
             if auto_run:
                 print(f"[Comparison] No completed runs found for {method_label}. Running pipeline automatically...")
-                run_name, actual_method_label = _auto_run_pipeline(data_path, method_label, extra_args=extra_args)
+                run_name, actual_method_label = _auto_run_pipeline(data_path, method_label, extra_args=extra_args, csv_path=csv_path)
             else:
                 raise FileNotFoundError(
                     f"No completed runs found for method_label: {method_label}. "
@@ -58,7 +68,7 @@ def load_run_results(
     if not tracker.is_completed("solver"):
         if auto_run:
             print(f"[Comparison] Solver stage not completed for {method_label}/{run_name}. Re-running pipeline...")
-            run_name, actual_method_label = _auto_run_pipeline(data_path, method_label, extra_args=extra_args)
+            run_name, actual_method_label = _auto_run_pipeline(data_path, method_label, extra_args=extra_args, csv_path=csv_path)
             # Update tracker with new run
             tracker = ExperimentTracker(
                 data_path=data_path,
@@ -87,7 +97,7 @@ def load_run_results(
                 # This should have been caught earlier, but double-check
                 if auto_run:
                     print(f"[Comparison] Solver stage still not completed. Re-running pipeline...")
-                    run_name, actual_method_label = _auto_run_pipeline(data_path, method_label, extra_args=extra_args)
+                    run_name, actual_method_label = _auto_run_pipeline(data_path, method_label, extra_args=extra_args, csv_path=None)
                     tracker = ExperimentTracker(
                         data_path=data_path,
                         method_label=actual_method_label,
@@ -167,7 +177,7 @@ def load_run_results(
                 print(f"[Comparison] Error details: {traceback.format_exc()}")
                 print(f"[Comparison] Attempting to re-run pipeline...")
                 try:
-                    run_name, actual_method_label = _auto_run_pipeline(data_path, method_label, extra_args=extra_args)
+                    run_name, actual_method_label = _auto_run_pipeline(data_path, method_label, extra_args=extra_args, csv_path=None)
                     # Update tracker with new run
                     tracker = ExperimentTracker(
                         data_path=data_path,
@@ -243,7 +253,7 @@ def load_run_results(
     if not tracker.is_completed("evaluation"):
         if auto_run and "error" not in results:
             print(f"[Comparison] Evaluation stage not completed for {method_label}/{run_name}. Re-running pipeline...")
-            run_name, actual_method_label = _auto_run_pipeline(data_path, method_label, extra_args=extra_args)
+            run_name, actual_method_label = _auto_run_pipeline(data_path, method_label, extra_args=extra_args, csv_path=csv_path)
             # Update tracker with new run
             tracker = ExperimentTracker(
                 data_path=data_path,
@@ -272,7 +282,7 @@ def load_run_results(
                 # This should have been caught earlier, but double-check
                 if auto_run and "error" not in results:
                     print(f"[Comparison] Evaluation stage still not completed. Re-running pipeline...")
-                    run_name, actual_method_label = _auto_run_pipeline(data_path, method_label, extra_args=extra_args)
+                    run_name, actual_method_label = _auto_run_pipeline(data_path, method_label, extra_args=extra_args, csv_path=None)
                     tracker = ExperimentTracker(
                         data_path=data_path,
                         method_label=actual_method_label,
@@ -298,7 +308,7 @@ def load_run_results(
                 print(f"[Comparison] Failed to load evaluation results for {method_label}/{run_name}: {e}")
                 print(f"[Comparison] Attempting to re-run pipeline...")
                 try:
-                    run_name, actual_method_label = _auto_run_pipeline(data_path, method_label, extra_args=extra_args)
+                    run_name, actual_method_label = _auto_run_pipeline(data_path, method_label, extra_args=extra_args, csv_path=None)
                     # Update tracker with new run
                     tracker = ExperimentTracker(
                         data_path=data_path,
@@ -331,20 +341,27 @@ def load_run_results(
     return results
 
 
-def _auto_run_pipeline(data_path: Path, method_label: str, extra_args: Optional[List[str]] = None) -> tuple[str, str]:
+def _auto_run_pipeline(data_path: Path, method_label: str, extra_args: Optional[List[str]] = None, csv_path: Optional[Path] = None) -> tuple[str, str]:
     """Automatically run the pipeline for a given method_label.
     
     Parameters
     ----------
-    data_path: Path to data directory
+    data_path: Path to data directory (for ExperimentTracker)
     method_label: Method label (e.g., 'without_hessian', 'commercial_gurobi')
     extra_args: Optional list of additional command-line arguments to pass to the pipeline
+    csv_path: Optional CSV file path. If None, will be constructed from data_path.
     
     Returns
     -------
     Tuple of (run_name, actual_method_label) where actual_method_label
     is the method_label that was actually used to save the run.
     """
+    # Determine CSV path if not provided
+    if csv_path is None:
+        csv_path = data_path / "creditcard" / "creditcard.csv"
+        if not csv_path.exists():
+            csv_path = data_path / "creditcard.csv"
+    
     # Determine which script to run based on method_label
     actual_method_label = method_label  # Track the actual method_label used
     
@@ -365,7 +382,7 @@ def _auto_run_pipeline(data_path: Path, method_label: str, extra_args: Optional[
         cmd = [
             sys.executable,
             script,
-            "--data-path", str(data_path),
+            "--data-path", str(csv_path),
             "--solver", actual_solver,
         ]
     else:
@@ -374,7 +391,7 @@ def _auto_run_pipeline(data_path: Path, method_label: str, extra_args: Optional[
         cmd = [
             sys.executable,
             script,
-            "--data-path", str(data_path),
+            "--data-path", str(csv_path),
             "--solver-backend", "custom",
         ]
         
