@@ -149,11 +149,13 @@ def load_run_results(
                 if "error_solver" not in results:
                     results["error_solver"] = "Solver results could not be loaded"
                 # Continue to evaluation stage even if solver failed
-            
-            results["solver"] = solver_results
-            backend = solver_results.get("backend", "unknown")
-            results["backend"] = backend
-            
+            else:
+                results["solver"] = solver_results
+                backend = solver_results.get("backend", "unknown")
+                results["backend"] = backend
+                
+                # Extract weights and bias
+                if backend == "custom":
                     results["weights"] = solver_results.get("weights")
                     results["bias"] = solver_results.get("bias")
                 elif backend in ["gurobi", "pymoo_ga", "sklearn"]:
