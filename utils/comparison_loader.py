@@ -115,81 +115,151 @@ def load_run_results(
     solver_results = None  # Initialize variable
     if "error" not in results:
         try:
+            # Check if solver stage exists and is completed before loading
             if not tracker.is_completed("solver"):
                 # This should have been caught earlier, but double-check
                 if auto_run:
                     print(f"[Comparison] Solver stage still not completed. Re-running pipeline...")
                     run_name, actual_method_label = _auto_run_pipeline(data_path, method_label, extra_args=extra_args, csv_path=csv_path)
                     tracker = ExperimentTracker(
-                        data_path=data_path,
+                        data_path=tracker_data_path,
                         method_label=actual_method_label,
                         run_name=run_name,
                     )
                     time.sleep(2)
                     results["method_label"] = actual_method_label
                     results["run_name"] = run_name
+                    # Re-check after re-run
+                    if not tracker.is_completed("solver"):
+                        results["solver"] = None
+                        results["error_solver"] = f"Solver stage still not completed after re-run for {method_label}/{run_name}"
+                        solver_results = None
                 else:
-                    raise KeyError(f"Solver stage not completed for {method_label}/{run_name}")
+                    results["solver"] = None
+                    results["error_solver"] = f"Solver stage not completed for {method_label}/{run_name}. Use --auto-run to re-run."
+                    solver_results = None
             
-            solver_results = tracker.load_solver_results()
+            # Only try to load if solver stage is completed
+            if solver_results is None and tracker.is_completed("solver"):
+                solver_results = tracker.load_solver_results()
+            
+            if solver_results is None:
+                # Solver results couldn't be loaded
+                results["solver"] = None
+                if "error_solver" not in results:
+                    results["error_solver"] = "Solver results could not be loaded"
+                # Continue to evaluation stage even if solver failed
+            
             results["solver"] = solver_results
             backend = solver_results.get("backend", "unknown")
             results["backend"] = backend
             
-            # Extract weights and bias
-            if backend == "custom":
-                results["weights"] = solver_results.get("weights")
-                results["bias"] = solver_results.get("bias")
-            elif backend in ["gurobi", "pymoo_ga", "sklearn"]:
-                # Commercial solvers also save weights/bias
-                results["weights"] = solver_results.get("weights")
-                results["bias"] = solver_results.get("bias")
+                    results["weights"] = solver_results.get("weights")
+                    results["bias"] = solver_results.get("bias")
+                elif backend in ["gurobi", "pymoo_ga", "sklearn"]:
+                    # Commercial solvers also save weights/bias
+                    results["weights"] = solver_results.get("weights")
+                    results["bias"] = solver_results.get("bias")
+                    
+                    # Fallback to model if weights not available (for sklearn)
+                    if results["weights"] is None:
+                        model = solver_results.get("model")
+                        if model is not None:
+                            results["weights"] = model.coef_.ravel()
+                            results["bias"] = float(model.intercept_[0])
                 
-                # Fallback to model if weights not available (for sklearn)
-                if results["weights"] is None:
-                    model = solver_results.get("model")
-                    if model is not None:
-                        results["weights"] = model.coef_.ravel()
-                        results["bias"] = float(model.intercept_[0])
-            
-            # Solver details
-            solver_details = solver_results.get("solver_details", {})
-            results["solver_details"] = solver_details
-            results["threshold"] = solver_results.get("threshold", 0.5)
-            results["val_score"] = solver_results.get("val_score", 0.0)
-            
-            # Selected features
-            results["selected_features"] = solver_details.get("selected_features", [])
-            
-            # Iteration info
-            if backend == "custom":
-                results["iterations"] = solver_details.get("iterations", None)
-                results["snapshots_count"] = solver_details.get("snapshots_recorded", 0)
-                results["final_loss"] = solver_details.get("final_loss", None)
-                results["method"] = solver_details.get("method", "unknown")
-                results["learning_rate"] = solver_details.get("learning_rate", None)
-                results["line_search"] = solver_details.get("line_search", False)
-                # Load history if available
-                if "history" in solver_details and solver_details["history"]:
-                    results["loss_history"] = solver_details["history"].get("loss", [])
-                else:
+                # Solver details
+                solver_details = solver_results.get("solver_details", {})
+                results["solver_details"] = solver_details
+                results["threshold"] = solver_results.get("threshold", 0.5)
+                results["val_score"] = solver_results.get("val_score", 0.0)
+                
+                # Selected features
+                results["selected_features"] = solver_details.get("selected_features", [])
+                
+                # Iteration info
+                if backend == "custom":
+                    results["iterations"] = solver_details.get("iterations", None)
+                    results["snapshots_count"] = solver_details.get("snapshots_recorded", 0)
+                    results["final_loss"] = solver_details.get("final_loss", None)
+                    results["method"] = solver_details.get("method", "unknown")
+                    results["learning_rate"] = solver_details.get("learning_rate", None)
+                    results["line_search"] = solver_details.get("line_search", False)
+                    # Load history if available
+                    if "history" in solver_details and solver_details["history"]:
+                        results["loss_history"] = solver_details["history"].get("loss", [])
+                    else:
+                        results["loss_history"] = None
+                elif backend in ["gurobi", "pymoo_ga"]:
+                    results["iterations"] = None  # Commercial solvers don't report exact iterations
+                    results["snapshots_count"] = len(solver_results.get("snapshots", []))
+                    results["final_loss"] = solver_details.get("final_loss", None)
+                    results["method"] = backend
+                    results["learning_rate"] = None
+                    results["line_search"] = False
                     results["loss_history"] = None
-            elif backend in ["gurobi", "pymoo_ga"]:
-                results["iterations"] = None  # Commercial solvers don't report exact iterations
-                results["snapshots_count"] = len(solver_results.get("snapshots", []))
-                results["final_loss"] = solver_details.get("final_loss", None)
-                results["method"] = backend
-                results["learning_rate"] = None
-                results["line_search"] = False
-                results["loss_history"] = None
+                else:
+                    results["iterations"] = None
+                    results["snapshots_count"] = 0
+                    results["final_loss"] = None
+                    results["method"] = backend
+                    results["learning_rate"] = None
+                    results["line_search"] = False
+                    results["loss_history"] = None
+        except KeyError as e:
+            # Handle KeyError specifically (solver stage not in state.json)
+            if "solver" in str(e) or "stages" in str(e):
+                if auto_run and run_name is not None:
+                    print(f"[Comparison] Solver stage not found in state for {method_label}/{run_name}. Re-running pipeline...")
+                    import traceback
+                    try:
+                        run_name, actual_method_label = _auto_run_pipeline(data_path, method_label, extra_args=extra_args, csv_path=csv_path)
+                        # Update tracker with new run
+                        tracker = ExperimentTracker(
+                            data_path=tracker_data_path,
+                            method_label=actual_method_label,
+                            run_name=run_name,
+                        )
+                        time.sleep(2)
+                        results["method_label"] = actual_method_label
+                        results["run_name"] = run_name
+                        # Retry loading solver results
+                        if tracker.is_completed("solver"):
+                            solver_results = tracker.load_solver_results()
+                            if solver_results:
+                                backend = solver_results.get("backend", "unknown")
+                                results["solver"] = solver_results
+                                results["weights"] = solver_results.get("weights")
+                                results["bias"] = solver_results.get("bias")
+                                results["snapshots"] = solver_results.get("snapshots", [])
+                                results["snapshots_count"] = len(results["snapshots"])
+                                results["final_loss"] = solver_results.get("final_loss")
+                                results["method"] = backend
+                                results["learning_rate"] = solver_results.get("learning_rate")
+                                results["line_search"] = solver_results.get("line_search", False)
+                                results["loss_history"] = solver_results.get("loss_history")
+                            else:
+                                results["solver"] = None
+                                results["error_solver"] = "Solver results are empty after re-run"
+                        else:
+                            results["solver"] = None
+                            results["error_solver"] = "Solver stage still not completed after re-run"
+                    except Exception as retry_error:
+                        results["solver"] = None
+                        results["error_solver"] = (
+                            f"Failed to re-run pipeline: {type(retry_error).__name__}: {retry_error}\n"
+                            f"Retry traceback: {traceback.format_exc()}"
+                        )
+                else:
+                    results["solver"] = None
+                    results["error_solver"] = (
+                        f"Solver stage not found in state: {e}\n"
+                        f"Use --auto-run to automatically re-run the pipeline."
+                    )
             else:
-                results["iterations"] = None
-                results["snapshots_count"] = 0
-                results["final_loss"] = None
-                results["method"] = backend
-                results["learning_rate"] = None
-                results["line_search"] = False
-                results["loss_history"] = None
+                # Other KeyError, re-raise or handle differently
+                results["solver"] = None
+                results["error_solver"] = f"KeyError: {e}"
         except Exception as e:
             # If loading fails and auto_run is enabled, try to run the pipeline
             if auto_run and run_name is not None:
