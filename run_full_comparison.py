@@ -260,6 +260,12 @@ Examples:
 
   # Use enhanced GA instead of advanced GA
   python run_full_comparison.py --use-enhanced-ga
+  
+  # Explicitly use advanced GA (default, but can be specified)
+  python run_full_comparison.py --use-advanced-ga
+  
+  # Disable advanced GA (use basic GA)
+  python run_full_comparison.py --no-use-advanced-ga
         """,
     )
     
@@ -296,6 +302,16 @@ Examples:
         "--use-enhanced-ga",
         action="store_true",
         help="Use enhanced GA instead of advanced GA",
+    )
+    parser.add_argument(
+        "--use-advanced-ga",
+        action="store_true",
+        help="Use advanced GA (default: True if --use-enhanced-ga is not specified)",
+    )
+    parser.add_argument(
+        "--no-advanced-ga",
+        action="store_true",
+        help="Disable advanced GA (use basic GA instead)",
     )
     parser.add_argument(
         "--custom-ga-args",
@@ -370,10 +386,22 @@ Examples:
         print(f"\n[Full Comparison] Step 2: Running Custom Solver on Toy Dataset")
         toy_custom_run_name = f"toy_custom_{int(time.time())}"
         custom_ga_args = args.custom_ga_args or []
+        # Determine which GA to use
+        # Priority: --use-enhanced-ga > --use-advanced-ga > --no-advanced-ga > default (advanced)
+        if args.use_enhanced_ga:
+            use_advanced_ga = False
+        elif args.no_advanced_ga:
+            use_advanced_ga = False
+        elif args.use_advanced_ga:
+            use_advanced_ga = True
+        else:
+            # Default: use advanced GA
+            use_advanced_ga = True
+        
         success = run_custom_solver(
             data_path=toy_dataset_path,
             run_name=toy_custom_run_name,
-            use_advanced_ga=not args.use_enhanced_ga,
+            use_advanced_ga=use_advanced_ga,
             extra_args=custom_ga_args,
         )
         if success:
@@ -426,10 +454,21 @@ Examples:
         print(f"\n[Full Comparison] Step 5: Running Custom Solver on Full Dataset")
         full_custom_run_name = f"full_custom_{int(time.time())}"
         custom_ga_args = args.custom_ga_args or []
+        # Determine which GA to use (same logic as toy dataset)
+        if args.use_enhanced_ga:
+            use_advanced_ga = False
+        elif args.no_advanced_ga:
+            use_advanced_ga = False
+        elif args.use_advanced_ga:
+            use_advanced_ga = True
+        else:
+            # Default: use advanced GA
+            use_advanced_ga = True
+        
         success = run_custom_solver(
             data_path=full_dataset_path,
             run_name=full_custom_run_name,
-            use_advanced_ga=not args.use_enhanced_ga,
+            use_advanced_ga=use_advanced_ga,
             extra_args=custom_ga_args,
         )
         if success:
